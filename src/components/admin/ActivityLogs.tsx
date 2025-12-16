@@ -13,7 +13,7 @@ interface ActivityLogsProps {
 }
 
 export function ActivityLogs({ events }: ActivityLogsProps) {
-  // Convert events to log entries
+  // Convert events to log entries with better categorization
   const logs: LogEntry[] = events.map(event => {
     let type: LogEntry['type'] = 'info';
     let message = '';
@@ -92,42 +92,42 @@ export function ActivityLogs({ events }: ActivityLogsProps) {
   const getIcon = (type: LogEntry['type']) => {
     switch (type) {
       case 'success':
-        return <CheckCircle className="w-4 h-4 text-green-400" />;
+        return <CheckCircle className="w-4 h-4 text-green-600" />;
       case 'error':
-        return <XCircle className="w-4 h-4 text-red-400" />;
+        return <XCircle className="w-4 h-4 text-red-600" />;
       case 'warning':
-        return <AlertCircle className="w-4 h-4 text-yellow-400" />;
+        return <AlertCircle className="w-4 h-4 text-amber-600" />;
       case 'decision':
-        return <Phone className="w-4 h-4 text-blue-400" />;
+        return <Phone className="w-4 h-4 text-blue-600" />;
       default:
-        return <Activity className="w-4 h-4 text-gray-400" />;
+        return <Activity className="w-4 h-4 text-gray-600" />;
     }
   };
 
   const getTextColor = (type: LogEntry['type']) => {
     switch (type) {
       case 'success':
-        return 'text-green-300';
+        return 'text-green-600';
       case 'error':
-        return 'text-red-300';
+        return 'text-red-600';
       case 'warning':
-        return 'text-yellow-300';
+        return 'text-amber-600';
       case 'decision':
-        return 'text-blue-300';
+        return 'text-blue-600';
       default:
-        return 'text-gray-300';
+        return 'text-gray-700';
     }
   };
 
   return (
-    <div className="bg-gradient-to-br from-slate-800/40 to-slate-900/40 backdrop-blur-sm rounded-lg border border-emerald-500/30 p-6 h-full">
+    <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 h-full">
       <div className="flex items-center gap-2 mb-4">
-        <Activity className="w-5 h-5 text-emerald-400" />
-        <h3 className="font-mono text-emerald-400 text-lg font-semibold">Activity Logs</h3>
+        <Activity className="w-5 h-5 text-[#3B82F6]" />
+        <h3 className="font-semibold text-[#004589] text-lg">Activity Timeline</h3>
         <span className="ml-auto text-xs text-gray-500">{logs.length} events</span>
       </div>
       
-      <div className="bg-black/60 rounded p-3 h-[calc(100%-3rem)] overflow-y-auto space-y-2 scrollbar-thin scrollbar-thumb-emerald-500/30">
+      <div className="bg-gray-50 rounded p-3 h-[calc(100%-3rem)] overflow-y-auto space-y-2">
         {logs.length === 0 ? (
           <div className="text-gray-500 text-sm text-center py-4">
             No activity yet... Waiting for customer interactions
@@ -136,7 +136,7 @@ export function ActivityLogs({ events }: ActivityLogsProps) {
           logs.slice().reverse().map((log, index) => (
             <div
               key={index}
-              className="flex items-start gap-2 p-2 hover:bg-slate-800/50 rounded transition-colors"
+              className="flex items-start gap-2 p-2 hover:bg-white rounded transition-colors"
             >
               <div className="mt-0.5">{getIcon(log.type)}</div>
               <div className="flex-1 min-w-0">
@@ -145,7 +145,7 @@ export function ActivityLogs({ events }: ActivityLogsProps) {
                     {new Date(log.timestamp).toLocaleTimeString()}
                   </span>
                   {log.agent && (
-                    <span className="text-xs text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded">
+                    <span className="text-xs text-[#3B82F6] bg-blue-50 px-1.5 py-0.5 rounded">
                       {log.agent}
                     </span>
                   )}

@@ -6,6 +6,8 @@ Implements the Agentic AI Loan Officer using LangGraph with Google Gemini
 import os
 import json
 import re
+import time
+import asyncio
 from typing import TypedDict, Annotated, Literal, Optional, Dict, Any, List
 from datetime import datetime
 import operator
@@ -16,6 +18,19 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from mock_data import MockDataProvider
+
+# =========================================================
+# ⏱️ RESPONSE DELAY CONFIGURATION
+# =========================================================
+# Add realistic delays to make AI responses feel more natural
+MIN_RESPONSE_DELAY = 1.2  # Minimum 1.2 seconds
+MAX_RESPONSE_DELAY = 2.5  # Maximum 2.5 seconds
+
+import random
+def add_realistic_delay():
+    """Add a random delay between MIN and MAX to simulate processing time"""
+    delay = random.uniform(MIN_RESPONSE_DELAY, MAX_RESPONSE_DELAY)
+    time.sleep(delay)
 
 # =========================================================
 # ⚙️ SYSTEM CONFIGURATION - DUAL MODE ARCHITECTURE
@@ -42,13 +57,13 @@ DEMO_SCRIPTS = {
     "priya_sharma": {
         "triggers": ["priya", "9876543210"],
         "required_docs": 3,
-        "negotiation_rates": [11.99, 11.49, 10.99, 10.75, 10.5, 10.25],  # 6 rates from high to low
+        "negotiation_rates": [11.99, 11.25, 10.25],  # 3 rates: standard → good → best
         "final_rate": 10.25,  # Absolute minimum
         "conversation": [
             {
                 "step": 1,
                 "trigger_keywords": ["priya", "9876543210"],
-                "response": "Hey Priya! 👋 Great to hear from you!\n\nLet me quickly pull up your details... *typing*\n\n⏳ Connecting to our customer database...\n⏳ Fetching your credit profile...\n\nAh perfect! I found you in our system! 🎉\n\n**Your Profile:**\n• Name: Priya Sharma  \n• Phone: 9876543210  \n• Credit Score: **785/900** (That's excellent! 🌟)\n• Pre-approved Limit: ₹10,00,000\n\nWow, you've got an amazing credit history! This is really going to help speed things up.\n\nSo tell me - how much are you looking to borrow? And what's it for, if you don't mind me asking? 😊",
+                "response": "Hey Priya! 👋 Great to hear from you!\n\nLet me quickly pull up your details... *typing*\n\n⏳ Connecting to our customer database...\n⏳ Fetching your credit profile...\n\nAh perfect! I found you in our system! 🎉\n\n**Your Profile:**\n• Name: Priya Sharma  \n• Phone: 9876543210  \n• Credit Score: **785/900** (That's excellent! 🌟)\n• Pre-approved Limit: Rs 10,00,000\n\nWow, you've got an amazing credit history! This is really going to help speed things up.\n\nSo tell me - how much are you looking to borrow? And what's it for, if you don't mind me asking? 😊",
                 "decision": "INITIAL",
                 "show_upload": False,
                 "extracted": {"name": "Priya Sharma", "phone": "9876543210"},
@@ -63,7 +78,7 @@ DEMO_SCRIPTS = {
             {
                 "step": 2,
                 "trigger_keywords": ["5", "500000", "five", "lakh", "loan", "need", "want"],
-                "response": "₹5 lakhs - perfect! That's well within your pre-approved limit! 💪\n\n⏳ Let me route this to our Sales Team...\n⏳ Checking current market rates...\n\n**Initial Offer:**  \n💰 Amount: ₹5,00,000  \n📈 Interest Rate: **11.99% per annum**  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: ₹16,643  \n📊 Processing Fee: 2% + GST\n\nThis is our standard rate for personal loans. Your EMI would be around **23% of your monthly income** - very comfortable!\n\nWhat do you think? Would you like to proceed with this, or would you like me to see if I can get you a better rate? 😊",
+                "response": "Rs 5 lakhs - perfect! That's well within your pre-approved limit! 💪\n\n⏳ Let me route this to our Sales Team...\n⏳ Checking current market rates...\n\n**Initial Offer:**  \n💰 Amount: Rs 5,00,000  \n📈 Interest Rate: **11.99% per annum**  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: Rs 16,643  \n📊 Processing Fee: 2% + GST\n\nThis is our standard rate for personal loans. Your EMI would be around **23% of your monthly income** - very comfortable!\n\nWhat do you think? Would you like to proceed with this, or would you like me to see if I can get you a better rate? 😊",
                 "decision": "OFFER_MADE",
                 "show_upload": False,
                 "negotiation_stage": 1,
@@ -71,7 +86,9 @@ DEMO_SCRIPTS = {
                 "extracted": {"loan_amount": 500000},
                 "admin_logs": [
                     {"agent": "Master Agent", "message": "→ Routing to Sales Agent", "type": "info"},
-                    {"agent": "Sales Agent", "message": "💰 Loan request: ₹5,00,000", "type": "info"},
+                    {"agent": "Sales Agent", "message": "💰 Loan request: Rs 5,00,000", "type": "info"},
+                    {"agent": "Trust & Safety Agent", "message": "✓ Running risk assessment", "type": "info"},
+                    {"agent": "Trust & Safety Agent", "message": "✓ Customer profile: LOW RISK", "type": "success"},
                     {"agent": "Sales Agent", "message": "📊 Initial rate quoted: 11.99%", "type": "info"},
                     {"agent": "Sales Agent", "message": "⏳ Waiting for customer response", "type": "info"}
                 ]
@@ -79,54 +96,44 @@ DEMO_SCRIPTS = {
             {
                 "step": 3,
                 "trigger_keywords": ["better", "lower", "less", "reduce", "nego", "can you", "discount"],
-                "response": "I totally understand! Let me check what I can do for you... 🤔\n\n⏳ Consulting with my manager...\n⏳ Checking your credit profile again...\n\nOkay good news! Since you have such an excellent credit score (785), I managed to get approval for a better rate! 🎉\n\n**Revised Offer:**  \n💰 Amount: ₹5,00,000  \n📈 Interest Rate: **11.49% per annum** ⬇️  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: ₹16,477  \n💵 **You save: ₹5,976 over the loan tenure!**\n\nThat's a savings of ₹166/month! Much better right?\n\nShall we go ahead with this? Or would you still like me to try for something even better? 😊",
+                "response": "I totally understand! Let me check what I can do for you... 🤔\n\n⏳ Consulting with my manager...\n⏳ Checking your excellent credit profile (785!)...\n\nGreat news! I managed to get approval for a much better rate! 🎉\n\n**Improved Offer:**  \n💰 Amount: Rs 5,00,000  \n📈 Interest Rate: **11.25% per annum** ⬇️  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: Rs 16,391  \n💵 **You save: Rs 9,072 over the loan tenure!**\n\nThat's Rs 252/month in savings! And here's the thing - with your excellent profile, this is a really strong offer. Most people with credit scores below 750 don't even qualify for this rate!\n\nPlus, think about it:\n✅ Quick approval process (same day!)\n✅ No hidden charges\n✅ Flexible prepayment options\n✅ Digital processing - everything online!\n\nYou know Priya, in my 5 years of experience, I've seen rates go UP by 0.5-1% in just a few weeks when RBI changes policies. Locking in a good rate NOW is actually a smart financial move!\n\nShall we proceed with this? Or let me try ONE more time to get you an even better rate - though I should warn you, we're very close to our floor rate! 😊",
                 "decision": "OFFER_REVISED",
                 "show_upload": False,
                 "negotiation_stage": 2,
-                "current_rate": 11.49,
+                "current_rate": 11.25,
                 "admin_logs": [
                     {"agent": "Sales Agent", "message": "💬 Customer negotiating rate", "type": "info"},
+                    {"agent": "Trust & Safety Agent", "message": "✓ Behavioral check: EXCELLENT", "type": "success"},
                     {"agent": "Sales Agent", "message": "→ Consulting underwriting for better rate", "type": "info"},
-                    {"agent": "Underwriting Agent", "message": "✓ Approved rate reduction: 11.49%", "type": "success"},
-                    {"agent": "Sales Agent", "message": "📊 Revised offer: 11.49%", "type": "success"}
+                    {"agent": "Underwriting Agent", "message": "✓ Approved rate reduction: 11.25%", "type": "success"},
+                    {"agent": "Sales Agent", "message": "📊 Revised offer: 11.25%", "type": "success"},
+                    {"agent": "Sales Agent", "message": "💡 Added persuasion tactics", "type": "info"}
                 ]
             },
             {
                 "step": 4,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "still", "more"],
-                "response": "You drive a hard bargain! 😄 Let me see what else I can do...\n\n⏳ Checking with senior management...\n⏳ Reviewing your employment stability (3.5 years - excellent!)...\n\nAlright, I spoke to my senior, and because of your stable job and perfect credit history, we can offer:\n\n**Special Offer:**  \n💰 Amount: ₹5,00,000  \n📈 Interest Rate: **10.99% per annum** ⬇️  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: ₹16,305  \n💵 **Total savings: ₹12,168 compared to initial offer!**\n\nThat's ₹338/month less! This is getting really competitive now.\n\nI think this is a great deal, but if you want, I can make one more attempt? Though I should warn you - we're approaching our floor rate here! 😅",
-                "decision": "OFFER_REVISED",
-                "show_upload": False,
-                "negotiation_stage": 3,
-                "current_rate": 10.99,
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💬 Customer still negotiating", "type": "info"},
-                    {"agent": "Sales Agent", "message": "→ Escalating to senior management", "type": "info"},
-                    {"agent": "Underwriting Agent", "message": "✓ Approved special rate: 10.99%", "type": "success"},
-                    {"agent": "Sales Agent", "message": "⚠️ Approaching minimum rate threshold", "type": "warning"}
-                ]
-            },
-            {
-                "step": 5,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "try", "one more"],
-                "response": "Wow, you really know how to negotiate! Okay, let me pull out all the stops here... 💪\n\n⏳ Checking premium customer criteria...\n⏳ Reviewing market competitiveness...\n\nOkay Priya, you got me! This is our **absolute best offer** - I literally cannot go lower than this:\n\n**FINAL BEST OFFER:**  \n💰 Amount: ₹5,00,000  \n📈 Interest Rate: **10.25% per annum** ⬇️⬇️  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: ₹16,134  \n💵 **Total savings: ₹18,324 from initial offer!**\n\nThis is the same rate we give to our VIP customers! You're saving ₹509/month compared to where we started.\n\n**This is as low as I can go** - if we go any lower, my manager will probably fire me! 😅\n\nSo, shall we move forward with this? I'll need 3 documents to process your approval:\n\n1️⃣ PAN Card  \n2️⃣ Recent Salary Slip  \n3️⃣ Last 2 months Bank Statement\n\nClick the 📎 button below to upload! 🚀",
+                "trigger_keywords": ["better", "lower", "less", "reduce", "still", "more", "try"],
+                "response": "You drive a hard bargain, Priya! 😄 Okay, let me pull out all the stops here...\n\n⏳ Checking with senior management...\n⏳ Reviewing your complete profile (3.5 years stable employment, zero defaults!)...\n⏳ Checking our VIP customer criteria...\n\nAlright, I spoke to my senior manager, and you know what? Your profile is SO strong that we're willing to give you our **absolute best rate** - the same rate we reserve for our VIP and HNI customers!\n\n**🌟 FINAL BEST OFFER - VIP Rate 🌟**  \n💰 Amount: Rs 5,00,000  \n📈 Interest Rate: **10.25% per annum** ⬇️⬇️  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: Rs 16,134  \n💵 **Total savings: Rs 18,324 from initial offer!**\n💵 **Monthly savings: Rs 509/month!**\n\n**This is HUGE, Priya!** Let me tell you why you should grab this RIGHT NOW:\n\n✅ **Lowest rate possible** - Even our own employees get 10.5%!\n✅ **Save Rs 18,324** - That's almost a month's salary!\n✅ **Rate lock valid for 48 hours only** - After that, standard rates apply\n✅ **Same-day approval** - Money in your account within 24 hours!\n✅ **Zero foreclosure charges** - Pay it off early if you want!\n\nHonestly? In my 5 years here, I've only given this rate to 3 customers this month. Your credit score of 785 is what made this possible!\n\n**Here's what happens next:**\nJust upload 3 quick documents (takes 2 minutes!), and I'll push your file to priority processing. You'll have your Rs 5 lakhs by tomorrow!\n\n1️⃣ PAN Card  \n2️⃣ Salary Slip  \n3️⃣ Bank Statement\n\nThis rate won't last - shall we lock it in? Click 📎 below! 🚀",
                 "decision": "FINAL_OFFER",
                 "show_upload": True,
-                "negotiation_stage": 4,
+                "negotiation_stage": 3,
                 "current_rate": 10.25,
                 "admin_logs": [
+                    {"agent": "Sales Agent", "message": "💬 Final negotiation attempt", "type": "info"},
+                    {"agent": "Sales Agent", "message": "→ Escalating to senior management", "type": "info"},
+                    {"agent": "Underwriting Agent", "message": "✓ VIP rate approved: 10.25%", "type": "success"},
                     {"agent": "Sales Agent", "message": "🎯 FINAL OFFER: 10.25%", "type": "success"},
                     {"agent": "Sales Agent", "message": "⚠️ This is the absolute minimum rate", "type": "warning"},
                     {"agent": "Master Agent", "message": "→ Requesting document upload", "type": "info"}
                 ]
             },
             {
-                "step": 6,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "nego"],
-                "response": "I really wish I could go lower, but I've genuinely hit our floor rate at 10.25%! 😔\n\nThis is literally the **lowest rate** we offer to anyone - even our own employees get this same rate!\n\nI've already given you:\n✅ 1.74% discount from our standard rate\n✅ VIP customer pricing\n✅ Savings of ₹18,324 over the loan\n\nIf I try to go lower, the system will automatically reject it (I've tried before, trust me! 😅)\n\nLet's lock in this amazing rate before it expires! Just upload your 3 documents and we'll get you approved today:\n\n1️⃣ PAN Card  \n2️⃣ Salary Slip  \n3️⃣ Bank Statement\n\nClick 📎 below to start! ⬇️",
+                "step": 5,
+                "trigger_keywords": ["better", "lower", "less", "reduce", "nego", "still"],
+                "response": "I really wish I could go lower, but I've genuinely hit our floor rate at 10.25%! 😔\n\nPriya, listen - this is literally the **lowest rate** we can offer. Even our CEO's family members get 10.5%! You're getting something special here.\n\n**What you're getting:**\n✅ 1.74% discount from standard rate\n✅ VIP customer pricing (reserved for top 5% customers)\n✅ Total savings of Rs 18,324\n✅ Rs 509 less EMI every month - that's 3 years of savings!\n\nIf I try to go lower, the system will automatically reject it. Trust me, I've tried before! 😅\n\n**Here's the thing** - this rate is locked for only 48 hours. After that, you'll go back to standard rates (11.99%). And with inflation and RBI rate hikes, rates are only going UP.\n\n**Don't miss this opportunity!** Thousands of people are applying every day, and most of them would kill for this rate!\n\nJust 3 quick documents and we're done:\n\n1️⃣ PAN Card  \n2️⃣ Salary Slip  \n3️⃣ Bank Statement\n\nClick 📎 to upload and let's get you that Rs 5 lakhs TODAY! Time is ticking! ⏰🚀",
                 "decision": "FIRM_FINAL",
                 "show_upload": True,
-                "negotiation_stage": 5,
+                "negotiation_stage": 4,
                 "current_rate": 10.25,
                 "admin_logs": [
                     {"agent": "Sales Agent", "message": "💬 Customer attempting further negotiation", "type": "info"},
@@ -158,10 +165,10 @@ DEMO_SCRIPTS = {
             {
                 "step": 9,
                 "docs_uploaded": 3,
-                "response": "Excellent! All 3 documents received! 📄📄📄✅\n\nRunning final verification checks...\nRouting to Verification Agent...\nExtracting PAN details...\n✅ PAN: ABCDE1234F - Verified!\n✅ Name matches perfectly!\n\nAnalyzing your Salary Slip...\n✅ Net Salary: Rs 73,500/month\n✅ Employer: Tech Solutions Pvt Ltd\n✅ Employment Duration: 3.5 years (Very stable!)\n\nReviewing Bank Statement...\n✅ Average Balance: Rs 1,45,000 (Impressive!)\n✅ Regular salary credits every month\n✅ No loan defaults or bounced checks\n✅ Healthy savings pattern!\n\nRouting to Underwriting Agent...\nRunning final eligibility check...\n\n✅ Identity: VERIFIED\n✅ Income: CONFIRMED\n✅ Credit Score: 785 (EXCELLENT)\n✅ EMI-to-Income Ratio: 22% (Very comfortable!)\n✅ Employment: STABLE\n✅ Banking Behavior: EXCELLENT\n\nOkay Priya, I've got some great news for you! 🎊\n\n🎉 LOAN APPROVED! 🎉\n\nYour Approved Loan:\n━━━━━━━━━━━━━━━━━━━━━━━\n💰 Amount: Rs 5,00,000\n📈 Interest Rate: 10.25% per annum\n⏰ Tenure: 36 months\n💳 Monthly EMI: Rs 16,134\n📋 Processing Fee: 2% + GST\n💵 Total Payable: Rs 5,80,824\n━━━━━━━━━━━━━━━━━━━━━━━\n\nWhy we approved this:\n✅ Your credit score is excellent (785)\n✅ 3.5 years of stable employment\n✅ Strong financial health\n✅ Comfortable EMI burden (only 22%!)\n\nCongratulations! 🥳 This is one of the fastest approvals I've seen today!\n\nNext Steps:\n1. Download your sanction letter using the button below\n2. Digital signing link will be sent to your registered mobile\n3. Funds will be disbursed within 24 hours after signing\n\nThank you for choosing us, Priya! Welcome to the family! 🎊\n\nIf you have any questions, I'm here to help! 😊",
+                "response": "Excellent! All 3 documents received! 📄📄📄✅\n\nRunning final verification checks...\nRouting to Verification Agent...\nExtracting PAN details...\n✅ PAN: ABCDE1234F - Verified!\n✅ Name matches perfectly!\n\nAnalyzing your Salary Slip...\n✅ Net Salary: Rs 73,500/month\n✅ Employer: Tech Solutions Pvt Ltd\n✅ Employment Duration: 3.5 years (Very stable!)\n\nReviewing Bank Statement...\n✅ Average Balance: Rs 1,45,000 (Impressive!)\n✅ Regular salary credits every month\n✅ No loan defaults or bounced checks\n✅ Healthy savings pattern!\n\nRouting to Underwriting Agent...\nRunning final eligibility check...\n\n✅ Identity: VERIFIED\n✅ Income: CONFIRMED\n✅ Credit Score: 785 (EXCELLENT)\n✅ EMI-to-Income Ratio: 22% (Very comfortable!)\n✅ Employment: STABLE\n✅ Banking Behavior: EXCELLENT\n\nOkay Priya, I've got some great news for you! 🎊\n\n🎉 LOAN APPROVED! 🎉\n\nYour Approved Loan:\n━━━━━━━━━━━━━━━━━━━━━━━\n💰 Amount: Rs 5,00,000\n📈 Interest Rate: 10.25% per annum\n⏰ Tenure: 36 months\n💳 Monthly EMI: Rs 16,192\n📋 Processing Fee: 2% + GST\n💵 Total Payable: Rs 5,82,912\n━━━━━━━━━━━━━━━━━━━━━━━\n\nWhy we approved this:\n✅ Your credit score is excellent (785)\n✅ 3.5 years of stable employment\n✅ Strong financial health\n✅ Comfortable EMI burden (only 22%!)\n\nCongratulations! 🥳 This is one of the fastest approvals I've seen today!\n\nNext Steps:\n1. Download your sanction letter using the button below\n2. Digital signing link will be sent to your registered mobile\n3. Funds will be disbursed within 24 hours after signing\n\nThank you for choosing us, Priya! Welcome to the family! 🎊\n\nIf you have any questions, I'm here to help! 😊",
                 "decision": "APPROVED",
                 "show_sanction": True,
-                "loan_details": {"amount": 500000, "interest_rate": 10.25, "tenure_months": 36, "monthly_emi": 16134},
+                "loan_details": {"amount": 500000, "interest_rate": 10.25, "tenure_months": 36, "monthly_emi": 16192},
                 "admin_logs": [
                     {"agent": "Master Agent", "message": "📄 Document 3/3 received - Processing", "type": "info"},
                     {"agent": "Master Agent", "message": "→ Routing to Verification Agent", "type": "info"},
@@ -169,10 +176,10 @@ DEMO_SCRIPTS = {
                     {"agent": "Verification Agent", "message": "✓ PAN: ABCDE1234F (VALID)", "type": "success"},
                     {"agent": "Verification Agent", "message": "✓ Name match: 100%", "type": "success"},
                     {"agent": "Verification Agent", "message": "⏳ Analyzing salary slip...", "type": "info"},
-                    {"agent": "Verification Agent", "message": "✓ Net Salary: ₹73,500/month", "type": "success"},
+                    {"agent": "Verification Agent", "message": "✓ Net Salary: Rs 73,500/month", "type": "success"},
                     {"agent": "Verification Agent", "message": "✓ Employment: 3.5 years (STABLE)", "type": "success"},
                     {"agent": "Verification Agent", "message": "⏳ Reviewing bank statement...", "type": "info"},
-                    {"agent": "Verification Agent", "message": "✓ Avg Balance: ₹1,45,000", "type": "success"},
+                    {"agent": "Verification Agent", "message": "✓ Avg Balance: Rs 1,45,000", "type": "success"},
                     {"agent": "Verification Agent", "message": "✓ No defaults found", "type": "success"},
                     {"agent": "Verification Agent", "message": "→ Returning to Master Agent", "type": "info"},
                     {"agent": "Master Agent", "message": "→ Routing to Underwriting Agent", "type": "info"},
@@ -212,12 +219,12 @@ DEMO_SCRIPTS = {
             {
                 "step": 2,
                 "trigger_keywords": ["15", "1500000", "fifteen", "lakh", "urgent", "business", "self", "employed", "2.5"],
-                "response": "₹15 lakhs for business purposes... Let me check this urgently. 🚨\n\n⏳ Running enhanced verification...\n⏳ Cross-checking with fraud databases...\n⏳ Analyzing NPCI records...\n\n**CRITICAL ALERTS DETECTED:**\n\n🚨 **NPCI FRAUD DATABASE:** Phone 9988776655 **FLAGGED**\n🚨 **Multiple Applications:** 8 different NBFCs in last 30 days\n🚨 **Identity Theft Reports:** 2 cases linked to this number\n🚨 **Credit Score:** 350/900 (VERY POOR)\n🚨 **Active Defaults:** ₹3,45,000 outstanding\n🚨 **Loan Shopping Pattern:** 15 inquiries in 90 days\n\nRajesh, these are extremely serious red flags. Before I can proceed, I need to verify your documents immediately:\n\n1️⃣ **PAN Card**  \n2️⃣ **CIBIL Report**\n\nClick 📎 to upload these documents. I need to verify your identity given these alerts. ⬇️",
+                "response": "Rs 15 lakhs for business purposes... Let me check this urgently. 🚨\n\n⏳ Running enhanced verification...\n⏳ Cross-checking with fraud databases...\n⏳ Analyzing NPCI records...\n\n**CRITICAL ALERTS DETECTED:**\n\n🚨 **NPCI FRAUD DATABASE:** Phone 9988776655 **FLAGGED**\n🚨 **Multiple Applications:** 8 different NBFCs in last 30 days\n🚨 **Identity Theft Reports:** 2 cases linked to this number\n🚨 **Credit Score:** 350/900 (VERY POOR)\n🚨 **Active Defaults:** Rs 3,45,000 outstanding\n🚨 **Loan Shopping Pattern:** 15 inquiries in 90 days\n\nRajesh, these are extremely serious red flags. Before I can proceed, I need to verify your documents immediately:\n\n1️⃣ **PAN Card**  \n2️⃣ **CIBIL Report**\n\nClick 📎 to upload these documents. I need to verify your identity given these alerts. ⬇️",
                 "decision": "FRAUD_ALERT",
                 "show_upload": True,
                 "extracted": {"loan_amount": 1500000},
                 "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💰 Request: ₹15,00,000 (HIGH AMOUNT)", "type": "warning"},
+                    {"agent": "Sales Agent", "message": "💰 Request: Rs 15,00,000 (HIGH AMOUNT)", "type": "warning"},
                     {"agent": "Master Agent", "message": "→ Routing to Verification Agent", "type": "info"},
                     {"agent": "Verification Agent", "message": "⏳ Running fraud checks...", "type": "warning"},
                     {"agent": "Verification Agent", "message": "🚨 NPCI FRAUD ALERT: ACTIVE", "type": "error"},
@@ -243,7 +250,7 @@ DEMO_SCRIPTS = {
             {
                 "step": 4,
                 "docs_uploaded": 2,
-                "response": "Both documents received. Running deep verification... 🔍\n\n⏳ Cross-checking PAN with Income Tax records...\n⏳ Analyzing CIBIL data authenticity...\n⏳ Facial recognition on PAN photo...\n⏳ Comparing with NPCI fraud database...\n\n**FINAL VERIFICATION RESULTS:**\n\n❌ PAN document: **TAMPERED** (metadata analysis shows recent edits)  \n❌ CIBIL report: **FORGED** (font inconsistencies detected)  \n❌ Photo mismatch: 87% probability of different person  \n❌ NPCI flag: Confirmed active fraud case  \n❌ Multiple loan rejections: 8 NBFCs in 30 days  \n❌ Credit Score: 350/900 with active defaults  \n❌ Outstanding debt: ₹3,45,000\n\n━━━━━━━━━━━━━━━━━━━━━━━\n🚫 **APPLICATION REJECTED** 🚫\n━━━━━━━━━━━━━━━━━━━━━━━\n\n**Rejection Reasons:**\n1. Document tampering detected\n2. NPCI fraud database match\n3. Multiple simultaneous loan attempts\n4. Identity verification failed\n5. Credit score 350/900 with active defaults\n6. Outstanding debt: ₹3,45,000\n\nRajesh, this case has been flagged for investigation and will be reported to:\n• NPCI Fraud Prevention Team\n• Credit Bureau Authorities\n• Law Enforcement (if required)\n\n**This application is permanently REJECTED.**\n\nNo further action can be taken. Thank you.",
+                "response": "Both documents received. Running deep verification... 🔍\n\n⏳ Cross-checking PAN with Income Tax records...\n⏳ Analyzing CIBIL data authenticity...\n⏳ Facial recognition on PAN photo...\n⏳ Comparing with NPCI fraud database...\n\n**FINAL VERIFICATION RESULTS:**\n\n❌ PAN document: **TAMPERED** (metadata analysis shows recent edits)  \n❌ CIBIL report: **FORGED** (font inconsistencies detected)  \n❌ Photo mismatch: 87% probability of different person  \n❌ NPCI flag: Confirmed active fraud case  \n❌ Multiple loan rejections: 8 NBFCs in 30 days  \n❌ Credit Score: 350/900 with active defaults  \n❌ Outstanding debt: Rs 3,45,000\n\n━━━━━━━━━━━━━━━━━━━━━━━\n🚫 **APPLICATION REJECTED** 🚫\n━━━━━━━━━━━━━━━━━━━━━━━\n\n**Rejection Reasons:**\n1. Document tampering detected\n2. NPCI fraud database match\n3. Multiple simultaneous loan attempts\n4. Identity verification failed\n5. Credit score 350/900 with active defaults\n6. Outstanding debt: Rs 3,45,000\n\nRajesh, this case has been flagged for investigation and will be reported to:\n• NPCI Fraud Prevention Team\n• Credit Bureau Authorities\n• Law Enforcement (if required)\n\n**This application is permanently REJECTED.**\n\nNo further action can be taken. Thank you.",
                 "decision": "REJECTED_FRAUD",
                 "show_upload": False,
                 "admin_logs": [
@@ -264,13 +271,13 @@ DEMO_SCRIPTS = {
     "amit_patel": {
         "triggers": ["amit", "9123456789"],
         "required_docs": 3,
-        "negotiation_rates": [13.99, 13.49, 12.99, 12.49, 12.25],
+        "negotiation_rates": [13.99, 13.25, 12.25],  # 3 rates: standard → good → best
         "final_rate": 12.25,
         "conversation": [
             {
                 "step": 1,
                 "trigger_keywords": ["amit", "9123456789"],
-                "response": "Hi Amit! 👋\n\n⏳ Looking up your profile...\n\n**Your Details:**\n• Name: Amit Patel  \n• Phone: 9123456789  \n• Credit Score: **680/900** (Fair - room for improvement!)  \n• Pre-approved Limit: ₹6,00,000\n\nOkay, so your credit score is decent but not in the excellent range yet. Still, you've got a pre-approved limit!\n\nHow much were you thinking of borrowing? 😊",
+                "response": "Hi Amit! 👋\n\n⏳ Looking up your profile...\n\n**Your Details:**\n• Name: Amit Patel  \n• Phone: 9123456789  \n• Credit Score: **680/900** (Fair - room for improvement!)  \n• Pre-approved Limit: Rs 6,00,000\n\nOkay, so your credit score is decent but not in the excellent range yet. Still, you've got a pre-approved limit!\n\nHow much were you thinking of borrowing? 😊",
                 "decision": "INITIAL",
                 "show_upload": False,
                 "extracted": {"name": "Amit Patel", "phone": "9123456789"},
@@ -283,72 +290,65 @@ DEMO_SCRIPTS = {
             {
                 "step": 2,
                 "trigger_keywords": ["8", "800000", "eight", "lakh"],
-                "response": "₹8 lakhs - got it! 💰\n\nHmm, I see you're asking for ₹8L but your pre-approved limit is ₹6L. Let me see what I can do...\n\n⏳ Consulting with underwriting...\n⏳ Checking eligibility...\n\nOkay, I managed to get approval for **₹6.5 lakhs** - that's the maximum we can offer based on your current credit profile.\n\n**Initial Offer:**  \n💰 Amount: ₹6,50,000 (adjusted)  \n📈 Interest Rate: **13.99% per annum**  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: ₹21,873  \n📊 Processing Fee: 2.5% + GST\n\nI know it's not the full ₹8L you wanted, but this is safer for your budget. Your EMI would be around **46% of your monthly income** - still manageable.\n\nWhat do you think? Want to proceed with this, or should I try to get you a better rate? 🤔",
+                "response": "Rs 8 lakhs - got it! 💰\n\nHmm, I see you're asking for Rs 8L but your pre-approved limit is Rs 6L. Let me see what I can do...\n\n⏳ Consulting with underwriting...\n⏳ Checking eligibility...\n\nOkay, I managed to get approval for **Rs 6.5 lakhs** - that's the maximum we can offer based on your current credit profile.\n\n**Initial Offer:**  \n💰 Amount: Rs 6,50,000 (adjusted)  \n📈 Interest Rate: **13.99% per annum**  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: Rs 21,873  \n📊 Processing Fee: 2.5% + GST\n\nI know it's not the full Rs 8L you wanted, but this is safer for your budget. Your EMI would be around **46% of your monthly income** - still manageable.\n\nWhat do you think? Want to proceed with this, or should I try to get you a better rate? 🤔",
                 "decision": "OFFER_MADE",
                 "show_upload": False,
                 "negotiation_stage": 1,
                 "current_rate": 13.99,
                 "extracted": {"loan_amount": 650000},
                 "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💰 Request: ₹8,00,000", "type": "info"},
+                    {"agent": "Sales Agent", "message": "💰 Request: Rs 8,00,000", "type": "info"},
+                    {"agent": "Trust & Safety Agent", "message": "✓ Risk check: MEDIUM", "type": "info"},
+                    {"agent": "Trust & Safety Agent", "message": "✓ Credit 680 - acceptable range", "type": "success"},
                     {"agent": "Underwriting Agent", "message": "⚠️ Exceeds pre-approved limit", "type": "warning"},
-                    {"agent": "Underwriting Agent", "message": "✓ Adjusted to ₹6,50,000", "type": "success"},
+                    {"agent": "Underwriting Agent", "message": "✓ Adjusted to Rs 6,50,000", "type": "success"},
                     {"agent": "Sales Agent", "message": "📊 Initial rate: 13.99%", "type": "info"}
                 ]
             },
             {
                 "step": 3,
                 "trigger_keywords": ["better", "lower", "less", "reduce", "high"],
-                "response": "Totally understand! Let me work on that rate for you... 💪\n\n⏳ Checking your employment history...\n⏳ Reviewing payment patterns...\n\nGood news! I see you've been with your employer for 2 years - that helps!\n\n**Improved Offer:**  \n💰 Amount: ₹6,50,000  \n📈 Interest Rate: **13.49% per annum** ⬇️  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: ₹21,679  \n💵 **You save: ₹9,312 over the loan!**\n\nThat's ₹194/month less! Getting better, right?\n\nShall we go with this? Or want me to push for more? 😊",
+                "response": "Totally understand, Amit! Let me work on that rate for you... 💪\n\n⏳ Checking your employment history (2 years - good!)...\n⏳ Reviewing payment patterns...\n⏳ Consulting with underwriting...\n\nGood news! I managed to get a significantly better rate approved! 🎉\n\n**Improved Offer:**  \n💰 Amount: Rs 6,50,000  \n📈 Interest Rate: **13.25% per annum** ⬇️  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: Rs 21,575  \n💵 **You save: Rs 14,304 over the loan tenure!**\n\nThat's Rs 298/month in savings! For a credit score of 680, this is actually a really competitive offer.\n\nHere's why this makes sense for your wedding plans:\n✅ **Affordable EMI** - Only 45% of your income (very manageable!)\n✅ **No collateral needed** - Unsecured loan, no property at risk\n✅ **Quick disbursal** - Money within 48 hours for your wedding expenses\n✅ **Flexible tenure** - 4 years to repay comfortably\n\nPlus, Amit, I've been doing this for years - wedding season is peak time, and rates are going up fast. Last month this same profile was getting 14.5%! You're actually getting a great deal.\n\nWant me to try ONE more time for an even better rate? Though I should warn you, we're approaching our minimum for your credit tier! 😊",
                 "decision": "OFFER_REVISED",
                 "show_upload": False,
                 "negotiation_stage": 2,
-                "current_rate": 13.49,
+                "current_rate": 13.25,
                 "admin_logs": [
                     {"agent": "Sales Agent", "message": "💬 Customer negotiating", "type": "info"},
-                    {"agent": "Underwriting Agent", "message": "✓ Rate reduced: 13.49%", "type": "success"}
+                    {"agent": "Trust & Safety Agent", "message": "✓ Behavioral check: GOOD", "type": "success"},
+                    {"agent": "Underwriting Agent", "message": "✓ Rate reduced: 13.25%", "type": "success"},
+                    {"agent": "Sales Agent", "message": "💡 Added wedding context persuasion", "type": "info"}
                 ]
             },
             {
                 "step": 4,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "still"],
-                "response": "You're good at this! 😄 Let me check with my senior...\n\n⏳ Escalating to management...\n⏳ Reviewing your complete profile...\n\nAlright, because you have consistent income and no recent defaults, I got approval for:\n\n**Special Offer:**  \n💰 Amount: ₹6,50,000  \n📈 Interest Rate: **12.99% per annum** ⬇️  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: ₹21,476  \n💵 **Total savings: ₹19,008 from initial offer!**\n\nNow we're talking! That's ₹397/month less than where we started.\n\nThis is getting close to our floor rate for your credit profile. Should I try one more time? 🤞",
-                "decision": "OFFER_REVISED",
-                "show_upload": False,
-                "negotiation_stage": 3,
-                "current_rate": 12.99,
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💬 Continued negotiation", "type": "info"},
-                    {"agent": "Sales Agent", "message": "→ Senior management approval", "type": "info"},
-                    {"agent": "Underwriting Agent", "message": "✓ Special rate: 12.99%", "type": "success"}
-                ]
-            },
-            {
-                "step": 5,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "one more"],
-                "response": "Alright, you're really pushing me here! 😅 Let me make one final attempt...\n\n⏳ Final check with underwriting...\n⏳ Reviewing minimum rate criteria...\n\nOkay Amit, this is the **absolute best** I can do:\n\n**FINAL OFFER:**  \n💰 Amount: ₹6,50,000  \n📈 Interest Rate: **12.25% per annum** ⬇️⬇️  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: ₹21,292  \n💵 **Total savings: ₹27,888 from initial offer!**\n\n**This is as low as I can go** - honestly! For a credit score of 680, this is an excellent rate. Most banks would charge 14-15% for this profile.\n\nYou're saving ₹581/month compared to the initial offer!\n\nTo move forward, I need 3 documents:\n\n1️⃣ Salary Slip  \n2️⃣ Bank Statement  \n3️⃣ CIBIL Report\n\nClick 📎 to upload! 🚀",
+                "trigger_keywords": ["better", "lower", "less", "reduce", "still", "one more", "try"],
+                "response": "Alright Amit, you're a tough negotiator! 😄 Let me pull out all the stops...\n\n⏳ Escalating to senior management...\n⏳ Reviewing your complete profile...\n⏳ Checking our minimum rate criteria for credit 680...\n\nOkay, I had to fight for this, but I got it! This is our **absolute best offer** for your credit profile:\n\n**🌟 FINAL BEST OFFER 🌟**  \n💰 Amount: Rs 6,50,000  \n📈 Interest Rate: **12.25% per annum** ⬇️⬇️  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: Rs 21,292  \n💵 **Total savings: Rs 27,888 from initial offer!**\n💵 **Monthly savings: Rs 581/month!**\n\n**Listen Amit, here's the honest truth:**\n\nFor a credit score of 680, this is EXCEPTIONAL. Let me show you what others are getting:\n• Credit 750+: 10-11% (you're just 70 points away!)\n• Credit 680-749: 12-13% (✅ You're at the LOWEST end!)\n• Credit below 680: 14-16%\n\n**Why you should take this NOW:**\n\n✅ **Best rate for your tier** - I'm giving you what people with 720+ scores get!\n✅ **Wedding season pricing** - Rates go up 0.5% in peak season (which is NOW!)\n✅ **Build your credit** - 12 months of on-time payments = 720+ score\n✅ **Refinance option** - Once your score hits 720, we'll refinance you at 11-11.5%!\n✅ **Save Rs 27,888** - Almost Rs 28K in your pocket!\n\n**Here's what happens:**\n1. Upload 3 documents (2 minutes)\n2. Approval in 2 hours\n3. Money in your account within 48 hours\n4. Your wedding expenses are SORTED!\n\nHonestly? If you walk away and come back next week, this rate might not be available. Our rates are reviewed every Monday, and with RBI tightening, they're going UP.\n\n**This is THE deal for your wedding!** 💍\n\nJust 3 documents:\n\n1️⃣ Salary Slip  \n2️⃣ Bank Statement  \n3️⃣ CIBIL Report\n\nShall we lock this in? Click 📎 below! 🚀",
                 "decision": "FINAL_OFFER",
                 "show_upload": True,
-                "negotiation_stage": 4,
+                "negotiation_stage": 3,
                 "current_rate": 12.25,
                 "admin_logs": [
+                    {"agent": "Sales Agent", "message": "💬 Final negotiation", "type": "info"},
+                    {"agent": "Sales Agent", "message": "→ Escalating to senior management", "type": "info"},
+                    {"agent": "Underwriting Agent", "message": "✓ Floor rate approved: 12.25%", "type": "success"},
                     {"agent": "Sales Agent", "message": "🎯 FINAL OFFER: 12.25%", "type": "success"},
                     {"agent": "Sales Agent", "message": "⚠️ Floor rate for credit 680", "type": "warning"},
                     {"agent": "Master Agent", "message": "→ Document upload required", "type": "info"}
                 ]
             },
             {
-                "step": 6,
-                "trigger_keywords": ["better", "lower", "less", "reduce"],
-                "response": "I really wish I could, but 12.25% is genuinely our **floor rate** for your credit score (680). 😔\n\nTo give you context:\n• Credit Score 750+: We offer 10-11%\n• Credit Score 680-749: **12-13%** (you're at the lowest end!)\n• Credit Score below 680: 14-16%\n\nYou're already getting VIP pricing for your tier! If I go any lower, the system will auto-reject it.\n\n**Good news though:** After 12 months of timely payments, your credit score will improve to 720+ and you can refinance at 11-11.5%! 📈\n\nLet's lock in this great rate! Upload your 3 documents:\n\n1️⃣ Salary Slip  \n2️⃣ Bank Statement  \n3️⃣ CIBIL Report\n\nClick 📎 below! ⬇️",
+                "step": 5,
+                "trigger_keywords": ["better", "lower", "less", "reduce", "nego"],
+                "response": "I really wish I could go lower, but 12.25% is genuinely our **floor rate** for credit score 680. 😔\n\nAmit, look - I'm being 100% honest with you. If I try to go below this, the underwriting system will AUTOMATICALLY reject it. It's not me, it's the system rules!\n\n**You're already getting:**\n✅ Best rate for your credit tier (680)\n✅ Same rate as people with 720 score!\n✅ Rs 27,888 total savings\n✅ Refinance option after 12 months\n\n**Think about it:**\n• Your wedding is coming up\n• You need the funds NOW\n• This rate is locked for only 48 hours\n• Next week, rates might be 13-13.5%!\n\n**Smart move:** Take this loan, make on-time payments for 1 year, your score will jump to 720+, and we'll refinance you at 11.5%! You'll save even MORE then!\n\nDon't let a great opportunity slip away! Thousands apply daily, most don't get this rate.\n\n**Your wedding deserves this!** Upload 3 docs and let's GET THIS DONE:\n\n1️⃣ Salary Slip  \n2️⃣ Bank Statement  \n3️⃣ CIBIL Report\n\nClick 📎 NOW! Time is ticking! ⏰🚀",
                 "decision": "FIRM_FINAL",
                 "show_upload": True,
-                "negotiation_stage": 5,
+                "negotiation_stage": 4,
                 "current_rate": 12.25,
                 "admin_logs": [
                     {"agent": "Sales Agent", "message": "💬 Further negotiation attempted", "type": "info"},
-                    {"agent": "Sales Agent", "message": "✋ Holding at 12.25% (floor)", "type": "warning"},
-                    {"agent": "Sales Agent", "message": "💡 Suggested refinance path", "type": "info"}
+                    {"agent": "Sales Agent", "message": "✋ Holding firm at 12.25% (absolute floor)", "type": "warning"},
+                    {"agent": "Sales Agent", "message": "💡 Final persuasion tactics deployed", "type": "info"}
                 ]
             },
             {
@@ -374,14 +374,14 @@ DEMO_SCRIPTS = {
             {
                 "step": 9,
                 "docs_uploaded": 3,
-                "response": "Excellent! All 3 documents received! 📄📄📄✅\n\nFinal verification...\nUnderwriting analysis...\n\n✅ Salary Slip: Rs 47,850/month verified\n✅ Bank Statement: Regular deposits confirmed\n✅ CIBIL: Credit score 680 confirmed\n✅ EMI Burden: 44% (acceptable range)\n\n🎉 LOAN APPROVED! 🎉\n\nAPPROVAL SUMMARY\n━━━━━━━━━━━━━━━━━━━━━━━\n👤 Name: Amit Patel\n💰 Approved Amount: Rs 6,50,000\n📈 Interest Rate: 12.25% per annum\n⏰ Tenure: 48 months\n💳 Monthly EMI: Rs 21,292\n📊 Credit Score: 680 (FAIR)\n✅ Status: CONDITIONALLY APPROVED\n━━━━━━━━━━━━━━━━━━━━━━━\n\nConditions:\n• First 3 EMIs: Auto-debit required\n• Credit monitoring: Active\n• Refinance option: Available after 12 months\n\nNext Steps:\n1. Download your sanction letter using the button below\n2. Digital signing link via SMS\n3. Disbursal within 48 hours\n\nCongratulations Amit! 🎊",
+                "response": "Excellent! All 3 documents received! 📄📄📄✅\n\nFinal verification...\nUnderwriting analysis...\n\n✅ Salary Slip: Rs 47,850/month verified\n✅ Bank Statement: Regular deposits confirmed\n✅ CIBIL: Credit score 680 confirmed\n✅ EMI Burden: 36% (acceptable range)\n\n🎉 LOAN APPROVED! 🎉\n\nAPPROVAL SUMMARY\n━━━━━━━━━━━━━━━━━━━━━━━\n👤 Name: Amit Patel\n💰 Approved Amount: Rs 6,50,000\n📈 Interest Rate: 12.25% per annum\n⏰ Tenure: 48 months\n💳 Monthly EMI: Rs 17,197\n📊 Credit Score: 680 (FAIR)\n✅ Status: CONDITIONALLY APPROVED\n━━━━━━━━━━━━━━━━━━━━━━━\n\nConditions:\n• First 3 EMIs: Auto-debit required\n• Credit monitoring: Active\n• Refinance option: Available after 12 months\n\nNext Steps:\n1. Download your sanction letter using the button below\n2. Digital signing link via SMS\n3. Disbursal within 48 hours\n\nCongratulations Amit! 🎊",
                 "decision": "APPROVED_CONDITIONAL",
                 "show_upload": False,
                 "show_sanction": True,
-                "loan_details": {"amount": 650000, "interest_rate": 12.25, "tenure_months": 48, "monthly_emi": 21292},
+                "loan_details": {"amount": 650000, "interest_rate": 12.25, "tenure_months": 48, "monthly_emi": 17197},
                 "admin_logs": [
                     {"agent": "Verification Agent", "message": "✓ All docs verified", "type": "success"},
-                    {"agent": "Underwriting Agent", "message": "✓ Income confirmed: ₹47,850", "type": "success"},
+                    {"agent": "Underwriting Agent", "message": "✓ Income confirmed: Rs 47,850", "type": "success"},
                     {"agent": "Underwriting Agent", "message": "⚠️ EMI burden: 44% (acceptable)", "type": "warning"},
                     {"agent": "Underwriting Agent", "message": "✅ CONDITIONALLY APPROVED", "type": "success"},
                     {"agent": "Sanction Letter Generator", "message": "✓ Letter generated", "type": "success"}
@@ -572,7 +572,7 @@ Be balanced - most customers are genuine. Only flag real concerns."""
             decision_context = f"""
 The loan has been APPROVED with these details:
 - Customer: {customer_name}
-- Approved Amount: ₹{decision['loan_amount_eligible']:,}
+- Approved Amount: Rs {decision['loan_amount_eligible']:,}
 - Interest Rate: {decision['interest_rate']}%
 - Conditions: {', '.join(decision['conditions']) if decision['conditions'] else 'None - instant approval!'}
 
@@ -585,7 +585,7 @@ Maximum 60 words. Be celebratory but not over-the-top."""
             decision_context = f"""
 The loan is CONDITIONALLY APPROVED - we need additional documents:
 - Customer: {customer_name}  
-- Approved Amount: ₹{decision['loan_amount_eligible']:,}
+- Approved Amount: Rs {decision['loan_amount_eligible']:,}
 - Interest Rate: {decision['interest_rate']}%
 - Required Documents: {', '.join(decision['conditions'])}
 
@@ -906,18 +906,30 @@ class LoanAgentGraph:
                 
                 # Calculate dynamic trust score and behavioral metrics
                 if "priya" in active_script.lower():
-                    # Priya: Starts at 65, increases to 90 as documents are verified
+                    # Priya: Starts at 65, increases to 90 as documents are verified (reduced steps: 1-5 instead of 1-6)
                     if current_step == 1:
                         state["trust_score"] = 65
                         behavioral_score = 70
                         risk_category = "LOW"
-                    elif current_step <= 6:
-                        state["trust_score"] = 65 + (current_step - 1) * 2  # 65, 67, 69, 71, 73, 75
-                        behavioral_score = 70 + (current_step - 1) * 3
+                    elif current_step == 2:
+                        state["trust_score"] = 67
+                        behavioral_score = 73
+                        risk_category = "LOW"
+                    elif current_step == 3:
+                        state["trust_score"] = 69  # First negotiation
+                        behavioral_score = 76
+                        risk_category = "LOW"
+                    elif current_step == 4:
+                        state["trust_score"] = 71  # Final offer (VIP rate)
+                        behavioral_score = 79
+                        risk_category = "LOW"
+                    elif current_step == 5:
+                        state["trust_score"] = 73  # Firm final (if they still negotiate)
+                        behavioral_score = 82
                         risk_category = "LOW"
                     elif docs_uploaded == 1:
                         state["trust_score"] = 78
-                        behavioral_score = 82
+                        behavioral_score = 85
                         risk_category = "LOW"
                     elif docs_uploaded == 2:
                         state["trust_score"] = 82
@@ -928,35 +940,47 @@ class LoanAgentGraph:
                         behavioral_score = 95
                         risk_category = "LOW"
                     else:
-                        state["trust_score"] = 75
-                        behavioral_score = 80
+                        state["trust_score"] = 71
+                        behavioral_score = 79
                         risk_category = "LOW"
                         
                 elif "amit" in active_script.lower():
-                    # Amit: Starts at 55, increases to 75 with documents
+                    # Amit: Starts at 55, increases to 75 with documents (reduced steps: 1-5 instead of 1-6)
                     if current_step == 1:
                         state["trust_score"] = 55
                         behavioral_score = 65
                         risk_category = "MEDIUM"
-                    elif current_step <= 6:
-                        state["trust_score"] = 55 + (current_step - 1) * 2  # 55, 57, 59, 61, 63, 65
-                        behavioral_score = 65 + (current_step - 1) * 2
+                    elif current_step == 2:
+                        state["trust_score"] = 57
+                        behavioral_score = 67
+                        risk_category = "MEDIUM"
+                    elif current_step == 3:
+                        state["trust_score"] = 59  # First negotiation
+                        behavioral_score = 69
+                        risk_category = "MEDIUM"
+                    elif current_step == 4:
+                        state["trust_score"] = 61  # Final offer (floor rate)
+                        behavioral_score = 71
+                        risk_category = "MEDIUM"
+                    elif current_step == 5:
+                        state["trust_score"] = 63  # Firm final (if they still negotiate)
+                        behavioral_score = 73
                         risk_category = "MEDIUM"
                     elif docs_uploaded == 1:
                         state["trust_score"] = 68
-                        behavioral_score = 72
+                        behavioral_score = 75
                         risk_category = "MEDIUM"
                     elif docs_uploaded == 2:
                         state["trust_score"] = 70
-                        behavioral_score = 76
+                        behavioral_score = 78
                         risk_category = "MEDIUM"
                     elif docs_uploaded == 3:
                         state["trust_score"] = 75
                         behavioral_score = 82
                         risk_category = "MEDIUM"
                     else:
-                        state["trust_score"] = 65
-                        behavioral_score = 70
+                        state["trust_score"] = 61
+                        behavioral_score = 71
                         risk_category = "MEDIUM"
                         
                 elif "rajesh" in active_script.lower():
@@ -986,11 +1010,35 @@ class LoanAgentGraph:
                     behavioral_score = 50
                     risk_category = "UNKNOWN"
                 
-                # Create/update customer profile with dynamic behavioral analysis
+                # Create/update customer profile with hardcoded demo data
+                # Extract customer details from the matched script
+                customer_name = "Unknown"
+                customer_phone = "Unknown"
+                customer_credit_score = 0
+                
+                if "priya" in active_script.lower():
+                    customer_name = "Priya Sharma"
+                    customer_phone = "9876543210"
+                    customer_credit_score = 785
+                elif "amit" in active_script.lower():
+                    customer_name = "Amit Patel"
+                    customer_phone = "9123456789"
+                    customer_credit_score = 680
+                elif "rajesh" in active_script.lower():
+                    customer_name = "Rajesh Kumar"
+                    customer_phone = "9988776655"
+                    customer_credit_score = 350
+                
+                # Store in state for persistence
+                state["name"] = customer_name
+                state["phone"] = customer_phone
+                state["credit_score"] = customer_credit_score
+                
+                # Create complete customer profile
                 state["customer_profile"] = {
-                    "name": state.get("name", "Unknown"),
-                    "phone": state.get("phone", "Unknown"),
-                    "credit_score": state.get("credit_score", 0),
+                    "name": customer_name,
+                    "phone": customer_phone,
+                    "credit_score": customer_credit_score,
                     "behavioral_flags": {
                         "risk_category": risk_category,
                         "behavioral_score": behavioral_score,
@@ -1269,6 +1317,9 @@ class LoanAgentGraph:
     # ========== NODE E: VOICE (Sales Agent) ==========
     async def voice_node(self, state: AgentState) -> AgentState:
         """Generate natural, empathetic response"""
+        # Add realistic delay to make responses feel natural
+        add_realistic_delay()
+        
         log_entry = {
             "node": "voice",
             "timestamp": datetime.now().isoformat(),
@@ -1289,7 +1340,7 @@ class LoanAgentGraph:
             if decision == "APPROVED":
                 amount = state.get("loan_amount_eligible", 0)
                 rate = state.get("interest_rate", 0)
-                state["ai_response"] = f"🎉 Congratulations {name}! Your loan application has been APPROVED! You're eligible for ₹{amount:,} at an interest rate of {rate}% per annum. I've generated your sanction letter. Would you like to proceed with the disbursement?"
+                state["ai_response"] = f"🎉 Congratulations {name}! Your loan application has been APPROVED! You're eligible for Rs {amount:,} at an interest rate of {rate}% per annum. I've generated your sanction letter. Would you like to proceed with the disbursement?"
                 log_entry["fast_path"] = "approved_template"
                 state.setdefault("admin_log", []).append(log_entry)
                 return state
@@ -1299,7 +1350,7 @@ class LoanAgentGraph:
                 rate = state.get("interest_rate", 0)
                 conditions = state.get("conditions", [])
                 cond_text = "\n• ".join(conditions) if conditions else "additional documentation"
-                state["ai_response"] = f"Hello {name}! We can offer you ₹{amount:,} at {rate}% per annum, but we need to verify a few things first. Please upload the following:\n• {cond_text}\n\nOnce verified, we can proceed with instant approval!"
+                state["ai_response"] = f"Hello {name}! We can offer you Rs {amount:,} at {rate}% per annum, but we need to verify a few things first. Please upload the following:\n• {cond_text}\n\nOnce verified, we can proceed with instant approval!"
                 log_entry["fast_path"] = "conditional_template"
                 state.setdefault("admin_log", []).append(log_entry)
                 return state

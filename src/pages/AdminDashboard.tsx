@@ -49,7 +49,13 @@ export function AdminDashboard() {
           setActiveSessions(message.data.active_sessions);
           break;
         case 'agent_active':
-          setActiveAgent(message.data.agent);
+          const agentId = message.data.agent;
+          console.log('🎯 Agent Active Event received:', agentId);
+          
+          // Backend now sends clean IDs: sales, verification, underwriting, trust, master
+          // Set active agent - it will stay active until next agent_active event
+          setActiveAgent(agentId);
+          console.log(`✅ Active agent set to: ${agentId} (will stay active until next agent)`);
           break;
         case 'risk_calculated':
           const newScore = message.data.risk_score;
@@ -60,7 +66,9 @@ export function AdminDashboard() {
           // Update customer profile with full data including behavioral_flags
           const fullProfile = message.data.customer;
           setCustomerProfile(fullProfile);
-          console.log('Customer Profile Updated:', fullProfile);
+          console.log('✅ Customer Profile Updated:', fullProfile);
+          console.log('   Name:', fullProfile?.name);
+          console.log('   Risk Category:', fullProfile?.behavioral_flags?.risk_category);
           break;
         case 'bot_response':
           // Check if bot response contains admin_data with trust scores
@@ -74,15 +82,10 @@ export function AdminDashboard() {
           }
           break;
         case 'log':
-          if (message.data.agent) {
-            // Normalize agent name to ID
-            const agentName = message.data.agent.toLowerCase();
-            if (agentName.includes('sales')) setActiveAgent('sales');
-            else if (agentName.includes('verification')) setActiveAgent('verification');
-            else if (agentName.includes('underwriting')) setActiveAgent('underwriting');
-            else if (agentName.includes('trust') || agentName.includes('safety')) setActiveAgent('trust');
-            else setActiveAgent('master');
-          }
+          // Log messages should NOT change active agent highlighting
+          // Only agent_active events should trigger visual highlighting
+          console.log('📝 Log message from:', message.data.agent);
+          
           // Extract trust_score from log if present
           if (message.data.trust_score !== undefined) {
             setRiskScore(message.data.trust_score);
@@ -121,28 +124,28 @@ export function AdminDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0F172A] text-white">
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
       {/* Header */}
-      <header className="bg-[#1E293B] border-b border-cyan-500/20 sticky top-0 z-50 backdrop-blur-sm">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-50 shadow-sm">
         <div className="px-4 sm:px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 sm:gap-4">
               <div className="bg-white rounded p-1.5 sm:p-2">
                 <img src={tataLogo} alt="Tata Capital" className="h-6 sm:h-8 object-contain" />
               </div>
-              <div className="border-l border-gray-600 pl-3 sm:pl-4">
-                <h1 className="text-lg sm:text-xl font-semibold">Risk Control Unit (RCU) Console</h1>
-                <p className="text-xs sm:text-sm text-gray-400 hidden sm:block">Tata Capital AI Underwriter - Live Monitoring</p>
+              <div className="border-l border-gray-300 pl-3 sm:pl-4">
+                <h1 className="text-lg sm:text-xl font-semibold text-[#004589]">Admin Dashboard - Real-Time Monitoring</h1>
+                <p className="text-xs sm:text-sm text-gray-600 hidden sm:block">Tata Capital AI Underwriter Console</p>
               </div>
             </div>
             <div className="flex items-center gap-3 sm:gap-6">
               <div className="text-right hidden sm:block">
-                <div className="text-sm text-gray-400">Senior Credit Officer</div>
-                <div className="text-cyan-400 font-semibold">{user?.username}</div>
+                <div className="text-sm text-gray-600">Admin User</div>
+                <div className="text-[#004589] font-semibold">{user?.username}</div>
               </div>
               <button
                 onClick={handleLogout}
-                className="flex items-center gap-2 px-4 py-2 bg-red-500/10 border border-red-500/30 rounded-lg hover:bg-red-500/20 transition-colors text-red-400"
+                className="flex items-center gap-2 px-4 py-2 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors text-red-600"
               >
                 <LogOut className="w-4 h-4" />
                 Logout
@@ -160,8 +163,8 @@ export function AdminDashboard() {
       />
 
       {/* Main Dashboard Grid */}
-      <div className="p-8 pt-24">
-        <div className="grid grid-cols-12 gap-8 max-w-[1800px] mx-auto">
+      <div className="p-6 sm:p-8">
+        <div className="grid grid-cols-12 gap-6 max-w-[1800px] mx-auto">
           {/* Left Column - Live Chat Mirror (25%) */}
           <div className="col-span-12 lg:col-span-3">
             <LiveChatMirror events={events} />

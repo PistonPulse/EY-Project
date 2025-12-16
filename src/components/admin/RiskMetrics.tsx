@@ -57,12 +57,12 @@ export function RiskMetrics({ riskScore, events, customerProfile }: RiskMetricsP
   const riskStatus = displayRiskScore >= 75 ? 'VERIFIED' : displayRiskScore >= 50 ? 'MEDIUM' : displayRiskScore > 0 ? 'HIGH RISK' : 'PENDING';
 
   return (
-    <div className="space-y-6 h-[calc(100vh-120px)] overflow-y-auto scrollbar-thin scrollbar-thumb-amber-500/30">
+    <div className="space-y-4 h-[calc(100vh-120px)] overflow-y-auto">
       {/* Trust Score */}
-      <div className="bg-gradient-to-br from-slate-800/40 to-slate-900/40 backdrop-blur-sm rounded-lg border border-emerald-500/30 p-6">
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
         <div className="flex items-center gap-2 mb-4">
-          <Shield className="w-5 h-5 text-emerald-400" />
-          <h3 className="font-mono text-emerald-400">Trust Score</h3>
+          <Shield className="w-5 h-5 text-[#3B82F6]" />
+          <h3 className="font-semibold text-[#004589]">Trust Score</h3>
         </div>
 
         {/* Speedometer */}
@@ -72,7 +72,7 @@ export function RiskMetrics({ riskScore, events, customerProfile }: RiskMetricsP
             <path
               d="M 20 90 A 80 80 0 0 1 180 90"
               fill="none"
-              stroke="#1e293b"
+              stroke="#E0E7FF"
               strokeWidth="20"
               strokeLinecap="round"
             />
@@ -101,40 +101,52 @@ export function RiskMetrics({ riskScore, events, customerProfile }: RiskMetricsP
           {/* Score Display */}
           <div className="absolute inset-0 flex items-center justify-center mt-8">
             <div className="text-center">
-              <div className="text-4xl text-emerald-400 font-mono">{Math.round(displayRiskScore)}</div>
-              <div className="text-xs text-gray-400 font-mono">/100</div>
+              <div className="text-5xl text-[#004589] font-bold">{Math.round(displayRiskScore)}</div>
+              <div className="text-sm text-gray-600 font-medium">/100</div>
             </div>
           </div>
         </div>
 
         <div className="mt-4 text-center">
-          <span className="text-xs font-mono text-gray-400">Status: </span>
-          <span className={`text-xs font-mono ${
-            riskStatus === 'VERIFIED' ? 'text-emerald-400' : 
-            riskStatus === 'MEDIUM' ? 'text-amber-400' : 
-            riskStatus === 'HIGH RISK' ? 'text-red-400' : 'text-gray-400'
+          <span className="text-sm text-gray-700 font-medium">Status: </span>
+          <span className={`text-sm font-bold ${
+            riskStatus === 'VERIFIED' ? 'text-green-600' : 
+            riskStatus === 'MEDIUM' ? 'text-amber-600' : 
+            riskStatus === 'HIGH RISK' ? 'text-red-600' : 'text-gray-600'
           }`}>{riskStatus}</span>
         </div>
 
         {customerProfile && (
-          <div className="mt-3 pt-3 border-t border-emerald-500/20 text-xs space-y-1">
-            <div className="flex justify-between text-gray-400">
-              <span>Credit Score:</span>
-              <span className="text-cyan-400">{customerProfile.credit_score || 'N/A'}</span>
+          <div className="mt-3 pt-3 border-t border-gray-200 text-sm space-y-2">
+            <div className="flex justify-between text-gray-700">
+              <span className="font-medium">Credit Score:</span>
+              <span className="text-[#004589] font-bold">{customerProfile.credit_score || 'N/A'}</span>
             </div>
             {customerProfile.behavioral_flags && (
               <>
-                <div className="flex justify-between text-gray-400">
-                  <span>Behavioral Score:</span>
-                  <span className="text-emerald-400">{customerProfile.behavioral_flags.behavioral_score || 0}/100</span>
+                <div className="flex justify-between text-gray-700">
+                  <span className="font-medium">Behavioral Score:</span>
+                  <span className="text-green-600 font-bold">{customerProfile.behavioral_flags.behavioral_score || 0}/100</span>
                 </div>
-                <div className="flex justify-between text-gray-400">
-                  <span>Risk Category:</span>
-                  <span className={`${
-                    customerProfile.behavioral_flags.risk_category === 'LOW' ? 'text-green-400' :
-                    customerProfile.behavioral_flags.risk_category === 'MEDIUM' ? 'text-amber-400' :
-                    'text-red-400'
+                <div className="flex justify-between text-gray-700">
+                  <span className="font-medium">Risk Category:</span>
+                  <span className={`font-bold ${
+                    customerProfile.behavioral_flags.risk_category === 'LOW' ? 'text-green-600' :
+                    customerProfile.behavioral_flags.risk_category === 'MEDIUM' ? 'text-amber-600' :
+                    customerProfile.behavioral_flags.risk_category === 'HIGH' ? 'text-red-600' :
+                    customerProfile.behavioral_flags.risk_category === 'CRITICAL' ? 'text-red-700' :
+                    customerProfile.behavioral_flags.risk_category === 'FRAUD_CONFIRMED' ? 'text-red-900' :
+                    'text-gray-600'
                   }`}>{customerProfile.behavioral_flags.risk_category}</span>
+                </div>
+                <div className="flex justify-between text-gray-700">
+                  <span className="font-medium">Doc Status:</span>
+                  <span className={`font-bold ${
+                    customerProfile.behavioral_flags.document_authenticity === 'VERIFIED' ? 'text-green-600' :
+                    customerProfile.behavioral_flags.document_authenticity === 'UNDER_REVIEW' ? 'text-blue-600' :
+                    customerProfile.behavioral_flags.document_authenticity === 'SUSPICIOUS' ? 'text-red-600' :
+                    'text-gray-500'
+                  }`}>{customerProfile.behavioral_flags.document_authenticity}</span>
                 </div>
               </>
             )}
@@ -143,10 +155,10 @@ export function RiskMetrics({ riskScore, events, customerProfile }: RiskMetricsP
       </div>
 
       {/* Behavioral Analysis */}
-      <div className="bg-gradient-to-br from-slate-800/40 to-slate-900/40 backdrop-blur-sm rounded-lg border border-amber-500/30 p-6">
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
         <div className="flex items-center gap-2 mb-4">
-          <Activity className="w-5 h-5 text-amber-400" />
-          <h3 className="font-mono text-amber-400">Behavioral Analysis</h3>
+          <Activity className="w-5 h-5 text-[#3B82F6]" />
+          <h3 className="font-semibold text-[#004589]">Behavioral Analysis</h3>
         </div>
 
         <div className="h-24 -mx-2">
@@ -155,7 +167,7 @@ export function RiskMetrics({ riskScore, events, customerProfile }: RiskMetricsP
               <Line 
                 type="monotone" 
                 dataKey="value" 
-                stroke="#f59e0b" 
+                stroke="#3B82F6" 
                 strokeWidth={2}
                 dot={false}
                 isAnimationActive={false}
@@ -164,33 +176,40 @@ export function RiskMetrics({ riskScore, events, customerProfile }: RiskMetricsP
           </ResponsiveContainer>
         </div>
 
-        <div className="mt-4 flex items-center justify-between text-xs font-mono">
-          <span className="text-gray-400">Stress Level:</span>
-          <span className="text-amber-400">NORMAL</span>
+        <div className="mt-4 flex items-center justify-between text-sm">
+          <span className="text-gray-600">Conversation Quality:</span>
+          <span className={`font-medium ${
+            customerProfile?.behavioral_flags?.conversation_quality === 'EXCELLENT' ? 'text-green-600' :
+            customerProfile?.behavioral_flags?.conversation_quality === 'GOOD' ? 'text-blue-600' :
+            customerProfile?.behavioral_flags?.conversation_quality === 'POOR' ? 'text-red-600' :
+            'text-gray-600'
+          }`}>
+            {customerProfile?.behavioral_flags?.conversation_quality || 'PENDING'}
+          </span>
         </div>
 
-        {customerProfile && (
-          <div className="mt-2 text-xs text-gray-400">
-            Behavioral Score: <span className="text-amber-400">{customerProfile.behavioral_score}/100</span>
+        {customerProfile && customerProfile.behavioral_flags && (
+          <div className="mt-2 text-sm text-gray-700">
+            Behavioral Score: <span className="text-[#3B82F6] font-semibold">{customerProfile.behavioral_flags.behavioral_score}/100</span>
           </div>
         )}
       </div>
 
       {/* System Logs */}
-      <div className="bg-gradient-to-br from-slate-800/40 to-slate-900/40 backdrop-blur-sm rounded-lg border border-green-500/30 p-6">
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
         <div className="flex items-center gap-2 mb-4">
-          <Terminal className="w-5 h-5 text-green-400" />
-          <h3 className="font-mono text-green-400">System Logs</h3>
+          <Terminal className="w-5 h-5 text-[#3B82F6]" />
+          <h3 className="font-semibold text-[#004589]">Activity Logs</h3>
         </div>
 
-        <div className="bg-black/60 rounded p-3 h-48 overflow-y-auto font-mono text-xs space-y-1 scrollbar-thin scrollbar-thumb-green-500/30">
+        <div className="bg-gray-50 rounded p-3 h-48 overflow-y-auto text-sm space-y-1">
           {logEvents.length === 0 ? (
-            <div className="text-gray-500">Waiting for events...</div>
+            <div className="text-gray-500">Waiting for customer activity...</div>
           ) : (
             logEvents.map((log: any, index) => (
               <div key={index} className="animate-fadeIn">
                 <span className="text-gray-500">[{log.time}] </span>
-                <span className={log.level === 'success' ? 'text-green-400' : 'text-amber-400'}>
+                <span className={log.level === 'success' ? 'text-green-600' : 'text-blue-600'}>
                   {log.text}
                 </span>
               </div>

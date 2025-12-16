@@ -22,24 +22,18 @@ Hi I am Priya and my phone is 9876543210
 
 ---
 
-### **Step 3-6: Rate Negotiation** (Say "better rate" or "can you lower it?" each time)
+### **Step 3-4: Rate Negotiation** (Reduced to 2 rounds only)
 - **Input**: `Can you give me a better rate?`
-  - **Response**: Rate drops to 11.49%
-  - **Dashboard**: Trust Score → 69, 71, 73, 75 (increases with each negotiation)
+  - **Response**: Rate drops to 11.25% + Persuasive language about market rates, benefits, RBI policies
+  - **Dashboard**: Trust Score → 69
 
-- **Input**: `Still high, anything lower?`
-  - **Response**: Rate drops to 10.99%
-
-- **Input**: `One more try please`
-  - **Response**: Rate drops to 10.75%
-
-- **Input**: `Final best offer?`
-  - **Response**: **FINAL RATE: 10.25%** + Upload button appears
-  - **Dashboard**: Trust Score → 75
+- **Input**: `Still high, anything lower?` or `One more try`
+  - **Response**: **FINAL RATE: 10.25%** (VIP rate) + Strong persuasion: urgency (48-hour lock), social proof, benefits list, call-to-action + Upload button appears
+  - **Dashboard**: Trust Score → 71
 
 ---
 
-### **Step 7-9: Document Upload**
+### **Step 5-7: Document Upload**
 **Upload these 3 documents** (click 📎 Upload Document button):
 1. `demo_documents/scenario_1_priya_approval/Priya_Sharma_PAN_Card.pdf`
 2. `demo_documents/scenario_1_priya_approval/Priya_Sharma_Salary_Slip_Nov_2025.pdf`
@@ -52,7 +46,7 @@ Hi I am Priya and my phone is 9876543210
 
 ---
 
-### **Step 10: Download Sanction Letter**
+### **Step 8: Download Sanction Letter**
 **Expected**: Green "Download Sanction Letter" button appears  
 **Action**: Click to download PDF with loan details  
 **Dashboard**: Risk: LOW, Behavioral Score: 95/100, Status: APPROVED
@@ -79,24 +73,18 @@ Hi I am Amit and my phone is 9123456789
 
 ---
 
-### **Step 3-6: Rate Negotiation** (Say "better" or "lower rate" each time)
+### **Step 3-4: Rate Negotiation** (Reduced to 2 rounds only)
 - **Input**: `Can you give me a better rate?`
-  - **Response**: Rate drops to 13.49%
-  - **Dashboard**: Trust Score → 59, 61, 63, 65
+  - **Response**: Rate drops to 13.25% + Persuasive language about wedding context, affordability, market conditions
+  - **Dashboard**: Trust Score → 59
 
-- **Input**: `Still high, can you reduce more?`
-  - **Response**: Rate drops to 12.99%
-
-- **Input**: `Try one more time?`
-  - **Response**: Rate drops to 12.49%
-
-- **Input**: `Best possible rate?`
-  - **Response**: **FINAL RATE: 12.25%** + Upload button appears
-  - **Dashboard**: Trust Score → 65
+- **Input**: `Still high, can you reduce more?` or `Try one more time`
+  - **Response**: **FINAL RATE: 12.25%** (Floor rate for credit 680) + Extensive persuasion: credit score education, refinancing path, wedding urgency, rate lock warnings + Upload button appears
+  - **Dashboard**: Trust Score → 61
 
 ---
 
-### **Step 7-9: Document Upload**
+### **Step 5-7: Document Upload**
 **Upload these 3 documents** (click 📎 Upload Document button):
 1. `demo_documents/scenario_2_amit_conditional/Amit_Patel_Salary_Slip_Nov_2025.pdf`
 2. `demo_documents/scenario_2_amit_conditional/Amit_Patel_Bank_Statement_Oct_Nov_2025.pdf`
@@ -109,7 +97,7 @@ Hi I am Amit and my phone is 9123456789
 
 ---
 
-### **Step 10: Download Sanction Letter** ✨ NEW!
+### **Step 8: Download Sanction Letter** ✨ NEW!
 **Expected**: Green "Download Sanction Letter" button appears  
 **Action**: Click to download PDF with conditional approval terms  
 **Dashboard**: Risk: MEDIUM, Behavioral Score: 82/100, Status: APPROVED_CONDITIONAL
@@ -210,8 +198,8 @@ Case flagged for investigation and reported to:
 
 | Scenario | Phone | Credit | Initial Offer | Negotiation | Final Rate | Documents | Outcome |
 |----------|-------|--------|---------------|-------------|------------|-----------|---------|
-| **Priya** | 9876543210 | 785 (Excellent) | 11.99% | 5 rounds | 10.25% | 3 docs | ✅ APPROVED + Sanction Letter |
-| **Amit** | 9123456789 | 680 (Fair) | 13.99% | 5 rounds | 12.25% | 3 docs | ⚠️ CONDITIONAL + Sanction Letter |
+| **Priya** | 9876543210 | 785 (Excellent) | 11.99% | 2 rounds | 10.25% | 3 docs | ✅ APPROVED + Sanction Letter |
+| **Amit** | 9123456789 | 680 (Fair) | 13.99% | 2 rounds | 12.25% | 3 docs | ⚠️ CONDITIONAL + Sanction Letter |
 | **Rajesh** | 9988776655 | 350 (Poor) | N/A | None | N/A | 2 docs | ❌ REJECTED - FRAUD |
 
 ---

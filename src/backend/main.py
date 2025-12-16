@@ -256,6 +256,10 @@ async def chat_endpoint(request: ChatRequest):
         # 2. Admin Logs (Step-by-step execution) - CRITICAL FOR AGENT VISUALIZATION
         if result.get("admin_log") and len(result.get("admin_log", [])) > 0:
             print(f"📋 Broadcasting {len(result['admin_log'])} admin logs...")
+            
+            # Track last agent to avoid spamming agent_active events
+            last_active_agent = None
+            
             for log in result["admin_log"]:
                 # Map graph agent log types to UI levels
                 level = log.get("type", "info")
@@ -276,6 +280,40 @@ async def chat_endpoint(request: ChatRequest):
                 agent_name = log.get("agent", "System")
                 print(f"  🤖 Broadcasting: {agent_name} - {msg}")
                 
+                # Normalize agent name for frontend (extract key identifier)
+                agent_id = agent_name.lower()
+                if "sales" in agent_id:
+                    agent_id = "sales"
+                elif "verification" in agent_id:
+                    agent_id = "verification"
+                elif "underwriting" in agent_id:
+                    agent_id = "underwriting"
+                elif "trust" in agent_id or "safety" in agent_id:
+                    agent_id = "trust"
+                elif "master" in agent_id:
+                    agent_id = "master"
+                else:
+                    # Skip "system" and other generic agents - don't highlight them
+                    if "system" in agent_id:
+                        agent_id = None
+                    else:
+                        agent_id = agent_name.lower().replace(" ", "_").replace("&", "and")
+                
+                # Only broadcast agent_active when agent actually CHANGES (not for every log)
+                # This prevents rapid flashing between agents
+                if agent_id and agent_id != last_active_agent and agent_id != "system":
+                    print(f"    🎯 Agent CHANGED: {last_active_agent} → {agent_id}")
+                    await broadcast_to_admin({
+                        "type": "agent_active",
+                        "data": {
+                            "agent": agent_id
+                        },
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    last_active_agent = agent_id
+                    await asyncio.sleep(0.2)  # Slight delay for visual effect
+                
+                # Broadcast the log message
                 await broadcast_to_admin({
                     "type": "log",
                     "data": {
@@ -285,8 +323,7 @@ async def chat_endpoint(request: ChatRequest):
                     },
                     "timestamp": datetime.now().isoformat()
                 })
-                # Small delay to simulate real-time processing
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.05)  # Small delay between logs
         else:
             print(f"⚠️ No admin_log found in result!")
 
