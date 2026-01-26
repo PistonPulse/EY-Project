@@ -492,6 +492,123 @@ class MockDataProvider:
         """Return all customer profiles (for admin purposes)"""
         return CUSTOMER_PROFILES
 
+    @staticmethod
+    def _levenshtein_distance(s1: str, s2: str) -> int:
+        """Calculate Levenshtein edit distance between two strings"""
+        if len(s1) < len(s2):
+            return MockDataProvider._levenshtein_distance(s2, s1)
+        
+        if len(s2) == 0:
+            return len(s1)
+        
+        previous_row = range(len(s2) + 1)
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        
+        return previous_row[-1]
+
+    @staticmethod
+    def _similarity_score(s1: str, s2: str) -> float:
+        """
+        Calculate similarity score between two strings (0 to 1).
+        Handles: case differences, minor typos, extra spaces.
+        """
+        # Normalize: lowercase, strip, collapse multiple spaces
+        s1 = ' '.join(s1.lower().split())
+        s2 = ' '.join(s2.lower().split())
+        
+        if s1 == s2:
+            return 1.0
+        
+        if not s1 or not s2:
+            return 0.0
+        
+        # Calculate Levenshtein-based similarity
+        max_len = max(len(s1), len(s2))
+        distance = MockDataProvider._levenshtein_distance(s1, s2)
+        similarity = 1 - (distance / max_len)
+        
+        return similarity
+
+    @staticmethod
+    def fuzzy_match_by_name(name: str, threshold: float = 0.7) -> Dict[str, Any]:
+        """
+        Find customer by fuzzy name matching.
+        Handles: case differences, minor typos (1-2 chars), extra spaces.
+        Returns match info with safety checks for duplicate names.
+        
+        Args:
+            name: The name to search for
+            threshold: Minimum similarity score (0-1) to consider a match (0.7 = ~2 typos allowed)
+            
+        Returns:
+            Dict with: matches (list), unique (bool), customer (profile or None)
+        """
+        if not name or len(name.strip()) < 2:
+            return {"matches": [], "unique": False, "customer": None}
+        
+        name_normalized = ' '.join(name.lower().split())
+        matches = []
+        
+        for phone, profile in CUSTOMER_PROFILES.items():
+            profile_name = profile.get("name", "")
+            profile_name_normalized = ' '.join(profile_name.lower().split())
+            
+            # Calculate overall similarity
+            full_score = MockDataProvider._similarity_score(name_normalized, profile_name_normalized)
+            
+            # Also check if input matches first name or last name specifically
+            name_parts = profile_name_normalized.split()
+            partial_scores = [MockDataProvider._similarity_score(name_normalized, part) for part in name_parts]
+            best_partial = max(partial_scores) if partial_scores else 0
+            
+            # Use the better of full match or partial match (for "Priya" matching "Priya Sharma")
+            score = max(full_score, best_partial * 0.95)  # Slight penalty for partial match
+            
+            if score >= threshold:
+                matches.append({
+                    "profile": profile,
+                    "score": score,
+                    "name": profile_name,
+                    "match_type": "full" if full_score >= threshold else "partial"
+                })
+        
+        # Sort by score descending
+        matches.sort(key=lambda x: x["score"], reverse=True)
+        
+        # Return result with safety info
+        if len(matches) == 1:
+            return {
+                "matches": matches,
+                "unique": True,
+                "customer": matches[0]["profile"]
+            }
+        elif len(matches) > 1:
+            # Check if top match is significantly better than second
+            if matches[0]["score"] - matches[1]["score"] > 0.2:
+                # Clear winner - safe to use
+                return {
+                    "matches": matches,
+                    "unique": True,
+                    "customer": matches[0]["profile"],
+                    "note": "Clear best match"
+                }
+            # Multiple close matches - not safe to auto-select
+            return {
+                "matches": matches,
+                "unique": False,
+                "customer": None,
+                "names_found": [m["name"] for m in matches]
+            }
+        else:
+            return {"matches": [], "unique": False, "customer": None}
+
 
 # Helper function for quick testing
 def demo_lookup():

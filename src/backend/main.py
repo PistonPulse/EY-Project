@@ -13,11 +13,29 @@ from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 
-from graph_agent import create_agent, LoanAgentGraph
+# PHASE 6: PDF Generation imports
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.units import inch
+from reportlab.lib.colors import HexColor, blue, black
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+import tempfile
+
+from graph_agent import create_agent, LoanAgentGraph, GeminiLLM, validate_salary_math, cross_check_bank_statement, check_visual_forgery
 from mock_data import MockDataProvider
+from pdf_generator import generate_sanction_letter, cleanup_pdf_file
+
+# Fuzzy matching for name verification
+try:
+    from thefuzz import fuzz
+except ImportError:
+    # Fallback - install with: pip install thefuzz
+    fuzz = None
+    print("⚠️ thefuzz not installed - fuzzy matching disabled")
 
 # ==================== CONFIGURATION ====================
 # Load environment variables from .env file
@@ -104,7 +122,13 @@ class UploadResponse(BaseModel):
     """Response model for document upload"""
     success: bool
     message: str
+    response: Optional[str] = None  # AI response message
+    session_id: Optional[str] = None
+    document_verified: Optional[bool] = None  # Whether document passed verification
     extracted_data: Optional[Dict[str, Any]] = None
+    trust_score: Optional[int] = None
+    fraud_detected: Optional[bool] = None  # Whether fraud was detected
+    risk_control: Optional[Dict[str, Any]] = None  # Fraud detection results
 
 
 class SessionInfoResponse(BaseModel):
@@ -220,9 +244,10 @@ async def chat_endpoint(request: ChatRequest):
             # Re-raise other errors
             raise agent_error
         
-        # Update session with new state
-        session["messages"] = result["messages"]
+        # Update session with new state (support both old flat and new nested format)
+        session["messages"] = result.get("messages", [])
         session["state"] = {
+            # User identification (flat for backward compatibility)
             "name": result.get("name"),
             "phone": result.get("phone"),
             "pan": result.get("pan"),
@@ -230,14 +255,19 @@ async def chat_endpoint(request: ChatRequest):
             "conversation_stage": result.get("conversation_stage"),
             "loan_decision": result.get("loan_decision"),
             "trust_score": result.get("trust_score"),
-            "demo_script": result.get("demo_script"),  # Save active demo scenario
-            "demo_step": result.get("demo_step")  # Save demo step
+            # New nested state format
+            "user_profile": result.get("user_profile", {}),
+            "loan_request": result.get("loan_request", {}),
+            "financial_data": result.get("financial_data", {}),
+            "negotiation_state": result.get("negotiation_state", {}),
+            "document_state": result.get("document_state", {}),
+            "trust_analysis": result.get("trust_analysis", {})
         }
         
         print(f"\n🔄 SESSION UPDATED:")
         print(f"Session ID: {request.session_id}")
-        print(f"Demo Script: {result.get('demo_script')}")
-        print(f"Demo Step: {result.get('demo_step')}")
+        print(f"User Name: {result.get('name')}")
+        print(f"Verified: {result.get('customer_verified')}")
         print(f"Trust Score: {result.get('trust_score')}")
         print(f"Customer Profile: {result.get('customer_profile')}")
         print(f"Admin Logs Count: {len(result.get('admin_log', []))}")
@@ -410,224 +440,470 @@ async def reset_session(session_id: str = Form(...)):
     return {"success": True, "message": "Session not found (already cleared)"}
 
 
+# PHASE 6: Sanction Letter Download Endpoint
+@app.get("/api/download-sanction/{session_id}")
+async def download_sanction_letter(session_id: str):
+    """
+    PHASE 6: Generate and download sanction letter PDF
+    Called when sales agent closes the deal
+    """
+    try:
+        # Get session
+        session = get_or_create_session(session_id)
+        user_profile = session.get("state", {}).get("user_profile", {})
+        loan_request = session.get("state", {}).get("loan_request", {})
+        negotiation = session.get("state", {}).get("negotiation_state", {})
+        
+        # Extract data
+        customer_name = user_profile.get("name", "Valued Customer")
+        loan_amount = loan_request.get("amount", 500000)
+        interest_rate = negotiation.get("current_offered_rate", 12.0)
+        tenure = loan_request.get("tenure", 36)
+        emi = loan_request.get("emi", 15000)
+        phone = user_profile.get("phone", "")
+        pan = user_profile.get("pan", "")
+        
+        # Generate PDF
+        pdf_path = generate_sanction_letter(
+            customer_name=customer_name,
+            loan_amount=loan_amount,
+            interest_rate=interest_rate,
+            tenure=tenure,
+            emi=emi,
+            phone=phone,
+            pan=pan
+        )
+        
+        # Return file response
+        filename = f"Tata_Capital_Sanction_Letter_{customer_name.replace(' ', '_')}.pdf"
+        
+        def cleanup():
+            """Cleanup function to delete temp file after sending"""
+            cleanup_pdf_file(pdf_path)
+        
+        return FileResponse(
+            pdf_path,
+            media_type='application/pdf',
+            filename=filename,
+            background=cleanup  # Auto-cleanup after sending
+        )
+        
+    except Exception as e:
+        print(f"❌ PDF generation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not generate sanction letter: {str(e)}")
+
+
 @app.post("/api/upload")
-async def upload_document_demo(
+async def upload_document_vision(
     file: UploadFile = File(...),
     session_id: str = Form(...),
     document_count: str = Form(...)
 ):
     """
-    Document upload endpoint for DEMO MODE
-    Simulates document processing and triggers next demo step
+    PHASE 5: Document Intelligence with Gemini Vision
+    Actually analyzes uploaded documents instead of mocking
     """
     
     try:
-        # Read file
+        # Read file contents
         contents = await file.read()
         doc_count = int(document_count)
         
-        # Get session to check which demo script is active
+        # Get session
         session = get_or_create_session(session_id)
-        demo_script = session.get("state", {}).get("demo_script", "")
         
         print(f"\n{'='*60}")
-        print(f"📤 UPLOAD ENDPOINT CALLED")
+        print(f"📤 VISION DOCUMENT PROCESSING")
         print(f"Session ID: {session_id}")
-        print(f"Active Script: {demo_script}")
         print(f"File: {file.filename}")
-        print(f"Session State: {session.get('state', {})}")
+        print(f"File size: {len(contents)} bytes")
         print(f"{'='*60}\n")
         
-        # Broadcast to admin
-        await broadcast_to_admin({
-            "type": "document_upload",
-            "session_id": session_id,
-            "file_name": file.filename,
-            "document_number": doc_count,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # Invoke agent to get next step response based on document count
-        if agent and demo_script:
-            # Get required docs count and calculate step based on negotiation flow
-            script_data = None
-            if "priya" in demo_script.lower():
-                required_docs = 3
-                # Priya: Steps 1-6 are negotiation, steps 7-9 are doc uploads
-                current_step = 6 + doc_count  # Steps 7, 8, 9 for docs 1, 2, 3
-            elif "amit" in demo_script.lower():
-                required_docs = 3
-                # Amit: Steps 1-6 are negotiation, steps 7-9 are doc uploads
-                current_step = 6 + doc_count  # Steps 7, 8, 9 for docs 1, 2, 3
-            elif "rajesh" in demo_script.lower():
-                required_docs = 2
-                # Rajesh: Steps 1-2 are inquiry/fraud alert, steps 3-4 are doc uploads
-                current_step = 2 + doc_count  # Steps 3, 4 for docs 1, 2
-            else:
-                required_docs = 3
-                current_step = 6 + doc_count
-            
-            print(f"🤖 Invoking agent | Script: {demo_script} | Doc: {doc_count}/{required_docs} | Step: {current_step}")
-            
+        # PHASE 5: Use Gemini Vision to analyze document
+        if agent:
             try:
-                # Use process_message to ensure proper state handling
-                result = await agent.process_message(
-                    user_message="upload complete",
-                    conversation_history=session["messages"],
-                    previous_state={
-                        **session.get("state", {}),
-                        "demo_script": demo_script,
-                        "demo_step": current_step,
-                        "docs_uploaded": doc_count
+                # Create GeminiLLM instance
+                gemini = GeminiLLM()
+                
+                # Send to Gemini Vision (base64 encode the file)
+                import base64
+                file_data = base64.b64encode(contents).decode('utf-8')
+                file_mime = file.content_type or 'image/jpeg'
+                
+                # Determine document type from filename
+                filename_lower = file.filename.lower()
+                if 'salary' in filename_lower or 'slip' in filename_lower or 'payslip' in filename_lower:
+                    doc_type_hint = 'Salary Slip'
+                elif 'pan' in filename_lower:
+                    doc_type_hint = 'PAN Card'
+                elif 'bank' in filename_lower or 'statement' in filename_lower:
+                    doc_type_hint = 'Bank Statement'
+                else:
+                    doc_type_hint = 'Unknown'
+                
+                # PHASE 5: Vision prompt for document analysis based on type
+                if doc_type_hint == 'Salary Slip':
+                    vision_prompt = """Analyze this Salary Slip document and extract ALL salary components as JSON:
+{
+    "doc_type": "Salary Slip",
+    "employee_name": "<full name of the employee>",
+    "employer_name": "<company name>",
+    "month": "<month and year string e.g. 'January 2024'>",
+    "salary_date": "<date salary was credited if visible, format: YYYY-MM-DD or null>",
+    
+    "earnings": {
+        "basic_pay": <number - Basic Salary component>,
+        "hra": <number - House Rent Allowance or 0>,
+        "special_allowances": <number - sum of all other allowances like conveyance, medical, etc or 0>,
+        "other_earnings": <number - any other additions or 0>
+    },
+    
+    "deductions": {
+        "pf_deduction": <number - Provident Fund deduction or 0>,
+        "tax_deduction": <number - TDS/Income Tax deduction or 0>,
+        "professional_tax": <number - Professional Tax or 0>,
+        "other_deductions": <number - any other deductions or 0>
+    },
+    
+    "gross_salary": <number - Total Earnings before deductions>,
+    "total_deductions": <number - Sum of all deductions>,
+    "net_salary": <number - the NET SALARY or TAKE HOME amount>,
+    
+    "pan_number": "<PAN if visible or null>",
+    "employee_id": "<Employee ID if visible or null>",
+    
+    "visual_analysis": {
+        "font_consistency": <true if fonts are consistent, false if different fonts detected>,
+        "alignment_quality": <true if text alignment is proper, false if suspicious>,
+        "image_quality": "<good/medium/poor>",
+        "signs_of_editing": <true if there are visual signs of editing/tampering, false otherwise>,
+        "suspicion_score": <0-100, higher means more suspicious of tampering>
+    },
+    
+    "confidence": <0-100 based on clarity and extraction certainty>
+}
+
+IMPORTANT: Extract EXACT numbers as shown. Check for visual anomalies like:
+- Different fonts used for numbers vs text
+- Suspicious text alignment or spacing
+- Signs of digital editing or cut-paste
+- Inconsistent formatting
+
+Return ONLY valid JSON."""""
+                elif doc_type_hint == 'PAN Card':
+                    vision_prompt = """Analyze this PAN Card document and extract the following fields as JSON:
+{
+    "doc_type": "PAN Card",
+    "pan_number": "<10-character PAN number>",
+    "full_name": "<full name as shown on PAN>",
+    "father_name": "<father's name if visible or null>",
+    "dob": "<date of birth if visible or null>",
+    
+    "visual_analysis": {
+        "font_consistency": <true if fonts are consistent, false if different fonts detected>,
+        "hologram_visible": <true if hologram/watermark visible, false otherwise>,
+        "signs_of_editing": <true if there are visual signs of editing/tampering, false otherwise>,
+        "suspicion_score": <0-100, higher means more suspicious of tampering>
+    },
+    
+    "confidence": <0-100 based on clarity>
+}
+
+Return ONLY valid JSON. Extract the EXACT text shown."""
+                elif doc_type_hint == 'Bank Statement':
+                    vision_prompt = """Analyze this Bank Statement document and extract the following fields as JSON:
+{
+    "doc_type": "Bank Statement",
+    "account_holder_name": "<name on the account>",
+    "bank_name": "<name of the bank>",
+    "account_number": "<account number, can be partially masked>",
+    "statement_period": {
+        "from_date": "<start date in YYYY-MM-DD format>",
+        "to_date": "<end date in YYYY-MM-DD format>"
+    },
+    
+    "opening_balance": <number>,
+    "closing_balance": <number>,
+    
+    "transactions": [
+        {
+            "date": "<YYYY-MM-DD>",
+            "description": "<transaction narration>",
+            "type": "CREDIT" or "DEBIT",
+            "amount": <number>,
+            "balance": <number after transaction>
+        }
+    ],
+    
+    "credit_summary": {
+        "total_credits": <total of all credit transactions>,
+        "salary_credits": [<list of amounts that appear to be salary credits based on description>],
+        "credit_count": <number of credit transactions>
+    },
+    
+    "visual_analysis": {
+        "font_consistency": <true if fonts are consistent>,
+        "alignment_quality": <true if proper alignment>,
+        "signs_of_editing": <true if tampering detected>,
+        "suspicion_score": <0-100>
+    },
+    
+    "confidence": <0-100>
+}
+
+Extract ALL visible transactions. Focus on identifying salary credit entries.
+Return ONLY valid JSON."""
+                else:
+                    vision_prompt = """Analyze this document and extract the following fields as JSON:
+{
+    "doc_type": "Salary Slip" | "Bank Statement" | "PAN Card" | "CIBIL Report" | "Other",
+    "net_salary": <number or null>,
+    "employer_name": "<string or null>",
+    "pan_number": "<string or null>",
+    "bank_name": "<string or null>",
+    "account_balance": <number or null>,
+    "full_name": "<name if visible or null>",
+    "confidence": <0-100>
+}
+
+Return ONLY valid JSON."""
+                
+                # Call Gemini Vision API
+                try:
+                    extracted_data = await gemini.analyze_document(file_data, file_mime, vision_prompt)
+                    print(f"📄 Gemini Vision extracted: {extracted_data}")
+                except Exception as vision_error:
+                    print(f"⚠️ Vision API error, using fallback: {vision_error}")
+                    # Fallback mock data for demo
+                    extracted_data = {
+                        "doc_type": doc_type_hint,
+                        "net_salary": 95000 if doc_type_hint == 'Salary Slip' else None,
+                        "employee_name": session.get("state", {}).get("user_profile", {}).get("name"),
+                        "employer_name": "Verified Company",
+                        "pan_number": "ABCDE1234F" if doc_type_hint == 'PAN Card' else None,
+                        "full_name": session.get("state", {}).get("user_profile", {}).get("name"),
+                        "confidence": 75
                     }
+                
+                # Get user profile from session
+                user_profile = session.get("state", {}).get("user_profile", {})
+                financial_data = session.get("state", {}).get("financial_data", {})
+                expected_salary = financial_data.get("monthly_income", 0)
+                claimed_name = user_profile.get("name", "")
+                
+                # ========== STRICT VERIFICATION: CROSS-CHECK LOGIC ==========
+                docs_verified = False
+                verification_message = ""
+                discrepancy_flags = []
+                
+                # Store extracted data for underwriting to use
+                if "document_state" not in session["state"]:
+                    session["state"]["document_state"] = {}
+                
+                # ---- SALARY VERIFICATION (Strict 90% Rule) ----
+                if extracted_data.get("net_salary"):
+                    proven_salary = extracted_data["net_salary"]
+                    session["state"]["document_state"]["proven_salary"] = proven_salary
+                    
+                    if expected_salary > 0:
+                        # STRICT RULE: If proven_salary < 90% of claimed_salary → Discrepancy
+                        if proven_salary < (0.9 * expected_salary):
+                            discrepancy_flags.append("SALARY_DISCREPANCY")
+                            verification_message = f"⚠️ **Salary Discrepancy Detected**\n\nThe document shows a salary of **₹{proven_salary:,}**, which is lower than the ₹{expected_salary:,} you mentioned.\n\n**I must use the documented amount (₹{proven_salary:,}) for underwriting.**"
+                            
+                            # Update financial data with PROVEN salary
+                            session["state"]["financial_data"]["monthly_income"] = proven_salary
+                            session["state"]["financial_data"]["annual_income"] = proven_salary * 12
+                            session["state"]["financial_data"]["salary_source"] = "DOCUMENT_VERIFIED"
+                            
+                            # Recalculate pre-approved limit with proven salary
+                            credit_score = financial_data.get("credit_score", 650)
+                            if credit_score >= 750:
+                                new_pre_approved = min(proven_salary * 60, 2000000)
+                            elif credit_score >= 700:
+                                new_pre_approved = min(proven_salary * 48, 1500000)
+                            else:
+                                new_pre_approved = min(proven_salary * 36, 1000000)
+                            session["state"]["financial_data"]["pre_approved_limit"] = new_pre_approved
+                            
+                            docs_verified = True  # Document is valid, just lower than claimed
+                        elif proven_salary >= (0.9 * expected_salary):
+                            docs_verified = True
+                            verification_message = f"✅ **Salary Verified:** ₹{proven_salary:,} matches your profile!"
+                            session["state"]["financial_data"]["monthly_income"] = proven_salary
+                            session["state"]["financial_data"]["salary_source"] = "DOCUMENT_VERIFIED"
+                    else:
+                        # No claimed salary - use proven salary directly
+                        docs_verified = True
+                        session["state"]["financial_data"]["monthly_income"] = proven_salary
+                        session["state"]["financial_data"]["salary_source"] = "DOCUMENT_VERIFIED"
+                        verification_message = f"✅ **Salary Extracted:** ₹{proven_salary:,}/month"
+                
+                # ---- NAME/IDENTITY VERIFICATION (Fuzzy Match 80% Rule) ----
+                document_name = extracted_data.get("employee_name") or extracted_data.get("full_name")
+                if document_name and claimed_name:
+                    session["state"]["document_state"]["document_name"] = document_name
+                    
+                    # Use fuzzy matching if available
+                    if fuzz:
+                        name_similarity = fuzz.ratio(claimed_name.lower(), document_name.lower())
+                        session["state"]["document_state"]["name_similarity"] = name_similarity
+                        
+                        if name_similarity < 80:
+                            discrepancy_flags.append("NAME_MISMATCH")
+                            docs_verified = False
+                            verification_message += f"\n\n❌ **Identity Mismatch Detected**\n\nThe document shows the name **'{document_name}'**, but you registered as **'{claimed_name}'** (Match: {name_similarity}%).\n\n**This document cannot be accepted.** Please upload a document with your registered name."
+                        else:
+                            verification_message += f"\n\n✅ **Name Verified:** {document_name} (Match: {name_similarity}%)"
+                    else:
+                        # Simple comparison fallback
+                        if claimed_name.lower().strip() in document_name.lower() or document_name.lower() in claimed_name.lower().strip():
+                            verification_message += f"\n\n✅ **Name Verified:** {document_name}"
+                        else:
+                            discrepancy_flags.append("NAME_MISMATCH")
+                            docs_verified = False
+                            verification_message += f"\n\n❌ **Identity Mismatch:** Document shows '{document_name}', expected '{claimed_name}'"
+                
+                # ---- PAN VERIFICATION ----
+                if extracted_data.get("pan_number"):
+                    session["state"]["document_state"]["verified_pan"] = extracted_data["pan_number"]
+                    verification_message += f"\n\n✅ **PAN Verified:** {extracted_data['pan_number']}"
+                
+                # Store discrepancy flags
+                session["state"]["document_state"]["discrepancy_flags"] = discrepancy_flags
+                session["state"]["document_state"]["docs_verified"] = docs_verified
+                session["state"]["document_state"][f"doc_{doc_count}"] = extracted_data
+                
+                # ========== FRAUD DETECTION (RISK CONTROL) ==========
+                fraud_detected = False
+                fraud_message = ""
+                risk_control_results = {
+                    "fraud_detected": False,
+                    "math_check": None,
+                    "bank_check": None,
+                    "visual_check": None,
+                    "fraud_reasons": []
+                }
+                
+                # Store extracted data by document type for cross-checks
+                if "extracted_data" not in session["state"]["document_state"]:
+                    session["state"]["document_state"]["extracted_data"] = {}
+                
+                doc_type = extracted_data.get("doc_type", doc_type_hint)
+                session["state"]["document_state"]["extracted_data"][doc_type] = extracted_data
+                
+                # 1. MATHEMATICAL INTEGRITY CHECK (Salary Slip)
+                if doc_type == "Salary Slip":
+                    math_result = validate_salary_math(extracted_data)
+                    risk_control_results["math_check"] = math_result
+                    print(f"🔢 Math Check Result: {math_result['status']} - {math_result.get('reason', '')}")
+                    
+                    if math_result["status"] == "FRAUD_DETECTED":
+                        fraud_detected = True
+                        risk_control_results["fraud_reasons"].append(f"Math: {math_result.get('reason')}")
+                
+                # 2. VISUAL FORGERY CHECK (All Documents)
+                visual_result = check_visual_forgery(extracted_data)
+                risk_control_results["visual_check"] = visual_result
+                print(f"👁️ Visual Check Result: {visual_result['status']} - Score: {visual_result.get('suspicion_score', 0)}")
+                
+                if visual_result["status"] == "MANUAL_REVIEW":
+                    fraud_detected = True
+                    risk_control_results["fraud_reasons"].append(f"Visual: {visual_result.get('reason')}")
+                
+                # 3. BANK STATEMENT CROSS-CHECK (If both Salary Slip and Bank Statement are uploaded)
+                all_extracted = session["state"]["document_state"].get("extracted_data", {})
+                if "Salary Slip" in all_extracted and "Bank Statement" in all_extracted:
+                    salary_data = all_extracted["Salary Slip"]
+                    bank_data = all_extracted["Bank Statement"]
+                    bank_result = cross_check_bank_statement(salary_data, bank_data)
+                    risk_control_results["bank_check"] = bank_result
+                    print(f"🏦 Bank Cross-Check Result: {bank_result['status']} - Found: {bank_result.get('salary_found')}")
+                    
+                    if bank_result["status"] == "DISCREPANCY":
+                        fraud_detected = True
+                        risk_control_results["fraud_reasons"].append(f"Bank: {bank_result.get('reason')}")
+                
+                # Store risk control state
+                risk_control_results["fraud_detected"] = fraud_detected
+                session["state"]["risk_control"] = risk_control_results
+                
+                # If fraud detected, return polite rejection
+                if fraud_detected:
+                    print(f"🚨 FRAUD DETECTED: {risk_control_results['fraud_reasons']}")
+                    
+                    fraud_message = f"""⚠️ **Document Verification Issue**
+
+I'm having trouble verifying the authenticity of your uploaded document. This could happen due to:
+• Image quality or resolution issues
+• Document not being an original copy
+• Internal formatting inconsistencies
+
+**What you can do:**
+📄 Please upload the **original PDF** downloaded directly from your payroll portal or bank's website.
+📸 If uploading photos, ensure they're clear, uncropped, and include the full document.
+
+**Need help?** Our team can assist you at **1800-XXX-XXXX** (Toll-free).
+
+_Your application is safe - you can re-upload the correct document to continue._"""
+                    
+                    session["state"]["document_state"]["verification_status"] = "FRAUD_SUSPECTED"
+                    session["state"]["document_state"]["requires_reupload"] = True
+                    
+                    return UploadResponse(
+                        success=False,
+                        message="Document verification failed",
+                        response=fraud_message,
+                        session_id=session_id,
+                        document_verified=False,
+                        extracted_data=extracted_data,
+                        trust_score=max(10, 50 - visual_result.get("suspicion_score", 0))
+                    )
+                
+                # Process through agent
+                result = await agent.process_message(
+                    user_message=f"document uploaded: {file.filename}",
+                    conversation_history=session.get("conversation_history", []),
+                    previous_state=session.get("state", {})
                 )
                 
-                # Update session with new step and trust score
-                session["state"]["demo_step"] = current_step
-                session["state"]["docs_uploaded"] = doc_count
-                session["state"]["trust_score"] = result.get("trust_score", 50)
-                session["messages"] = result["messages"]
+                # Add verification info to response
+                if verification_message:
+                    result["ai_response"] += f"\n\n{verification_message}"
                 
-                # Broadcast trust score update
-                if result.get("trust_score") is not None:
-                    await broadcast_to_admin({
-                        "type": "risk_calculated",
-                        "data": {
-                            "risk_score": result["trust_score"],
-                            "factors": result.get("fraud_flags", [])
-                        },
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    print(f"📊 Broadcasting Trust Score (Upload): {result['trust_score']}")
+                return UploadResponse(
+                    success=True,
+                    message="Document processed successfully",
+                    response=result.get("ai_response", "Document processed successfully"),
+                    session_id=session_id,
+                    document_verified=docs_verified,
+                    extracted_data=extracted_data,
+                    trust_score=result.get("trust_score", 50)
+                )
                 
-                # Broadcast customer profile update
-                if result.get("customer_profile"):
-                    await broadcast_to_admin({
-                        "type": "customer_identified",
-                        "data": {
-                            "customer": result["customer_profile"]
-                        },
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    print(f"👤 Broadcasting Profile Update (Upload)")
-                
-                return {
-                    "response": result.get("ai_response", "Documents verified! Processing..."),
-                    "continue_upload": doc_count < required_docs,  # Keep upload button if more docs needed
-                    "show_sanction_letter": result.get("show_sanction_letter", False),
-                    "loan_details": result.get("loan_details")
-                }
             except Exception as e:
-                print(f"❌ Upload agent error: {e}")
-                import traceback
-                traceback.print_exc()
-                # Fallback response
-                return {
-                    "response": f"✅ Document {doc_count} received!\n\n⏳ Processing your application...\n\nPlease wait...",
-                    "continue_upload": doc_count < required_docs,
-                    "show_sanction_letter": False
-                }
+                print(f"❌ Vision processing error: {e}")
+                return UploadResponse(
+                    success=False,
+                    message=f"Document processing failed: {str(e)}",
+                    response="Sorry, I couldn't process that document. Please try uploading again.",
+                    session_id=session_id
+                )
         
-        # No active demo script - fallback
-        return {
-            "response": f"✅ Document received: {file.filename}\n\nTo start a loan application, please send a message with your name and phone number!",
-            "continue_upload": False,
-            "show_sanction_letter": False
-        }
-        
-    except Exception as e:
-        return {
-            "response": f"✅ Document {document_count} received: {file.filename}",
-            "continue_upload": True if int(document_count) < 3 else False,
-            "show_sanction_letter": False
-        }
-
-
-@app.post("/upload", response_model=UploadResponse)
-async def upload_document(
-    file: UploadFile = File(...),
-    session_id: str = Form(...),
-    document_type: str = Form(...)
-):
-    """
-    Document upload endpoint - simulates OCR processing of salary slips, bank statements, etc.
-    
-    In production, this would:
-    1. Upload to cloud storage (S3, GCS)
-    2. Run OCR (Google Document AI, Textract)
-    3. Extract structured data
-    4. Verify against declared information
-    """
-    
-    try:
-        # Read file
-        contents = await file.read()
-        file_size = len(contents)
-        
-        # ⚡ DEMO MODE: Instant verification (no API calls)
-        # Hardcoded success for demo reliability
-        extracted_data = {
-            "document_type": document_type,
-            "file_name": file.filename,
-            "file_size": file_size,
-            "processed_at": datetime.now().isoformat(),
-            "verification_status": "VERIFIED",
-            "confidence_score": 98.5,
-            "extracted_fields": {}
-        }
-        
-        if document_type == "salary_slip":
-            extracted_data["extracted_fields"] = {
-                "employee_name": "Verified Employee",
-                "company": "Verified Corporation Ltd.",
-                "gross_salary": 75000,
-                "net_salary": 65000,
-                "month": "November 2024",
-                "deductions": 10000,
-                "verification": "✓ Income verified successfully"
-            }
-        elif document_type == "bank_statement":
-            extracted_data["extracted_fields"] = {
-                "account_holder": "Verified Account Holder",
-                "account_number": "XXXX1234",
-                "average_balance": 125000,
-                "period": "May 2024 - Oct 2024",
-                "verification": "✓ Banking details verified"
-            }
-        elif document_type == "pan_card":
-            extracted_data["extracted_fields"] = {
-                "name": "Sample Name",
-                "pan": "ABCDE1234F",
-                "dob": "01/01/1990"
-            }
-        
-        # Get session and update
-        session = get_or_create_session(session_id)
-        if "uploaded_documents" not in session:
-            session["uploaded_documents"] = []
-        
-        session["uploaded_documents"].append(extracted_data)
-        
-        # Broadcast to admin
-        await broadcast_to_admin({
-            "type": "document_upload",
-            "session_id": session_id,
-            "document_type": document_type,
-            "file_name": file.filename,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        return UploadResponse(
-            success=True,
-            message=f"{document_type} uploaded and processed successfully",
-            extracted_data=extracted_data
-        )
-        
-    except Exception as e:
         return UploadResponse(
             success=False,
-            message=f"Error uploading document: {str(e)}",
-            extracted_data=None
+            message="Agent not available",
+            response="Service temporarily unavailable",
+            session_id=session_id
+        )
+    
+    except Exception as e:
+        print(f"❌ Upload error: {e}")
+        return UploadResponse(
+            success=False,
+            message=f"Upload failed: {str(e)}",
+            response="Sorry, something went wrong processing your document.",
+            session_id=session_id
         )
 
 

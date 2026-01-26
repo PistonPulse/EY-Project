@@ -1,12 +1,23 @@
 """
-TataSmartAgent - LangGraph State Machine
-Implements the Agentic AI Loan Officer using LangGraph with Google Gemini
+TataSmartAgent - Hub-and-Spoke Multi-Agent Architecture
+Implements a true agentic loan officer using LangGraph with dynamic routing
+
+Architecture:
+    ┌─────────────────────────────────────────┐
+    │              MASTER AGENT               │
+    │         (Router & Orchestrator)         │
+    └─────────────┬───────────────────────────┘
+                  │
+    ┌─────────────┼─────────────┬─────────────┬─────────────┐
+    ▼             ▼             ▼             ▼             ▼
+┌───────┐   ┌───────────┐   ┌───────────┐   ┌───────┐   ┌─────────┐
+│ Sales │   │Verification│   │Underwriting│   │ Trust │   │Document │
+│ Agent │   │   Agent    │   │   Agent    │   │ Agent │   │  Agent  │
+└───────┘   └───────────┘   └───────────┘   └───────┘   └─────────┘
 """
 
 import os
 import json
-import re
-import time
 import asyncio
 from typing import TypedDict, Annotated, Literal, Optional, Dict, Any, List
 from datetime import datetime
@@ -19,1494 +30,2084 @@ from pydantic import BaseModel, Field
 
 from mock_data import MockDataProvider
 
-# =========================================================
-# ⏱️ RESPONSE DELAY CONFIGURATION
-# =========================================================
-# Add realistic delays to make AI responses feel more natural
-MIN_RESPONSE_DELAY = 1.2  # Minimum 1.2 seconds
-MAX_RESPONSE_DELAY = 2.5  # Maximum 2.5 seconds
-
-import random
-def add_realistic_delay():
-    """Add a random delay between MIN and MAX to simulate processing time"""
-    delay = random.uniform(MIN_RESPONSE_DELAY, MAX_RESPONSE_DELAY)
-    time.sleep(delay)
-
-# =========================================================
-# ⚙️ SYSTEM CONFIGURATION - DUAL MODE ARCHITECTURE
-# =========================================================
-# Set to TRUE for Hackathon Demo (Scripted Mode - 100% Reliable)
-# Set to FALSE for Production (Real Gemini AI - Full Intelligence)
-# =========================================================
-DEMO_MODE = True
-
-# When DEMO_MODE = True:
-# - Uses pre-scripted flows for phone number triggers
-# - Zero API costs, zero latency, zero failure risk
-# - Perfect for stage presentations
-#
-# When DEMO_MODE = False:
-# - Uses real Gemini 1.5 Flash API for AI processing
-# - Natural language understanding
-# - Full production-grade intelligence
-# =========================================================
-
-# ==================== DEMO SCRIPTED MODE ====================
-# HUMANIZED MULTI-AGENT DEMO WITH NEGOTIATION - Friendly conversation with rate bargaining
-DEMO_SCRIPTS = {
-    "priya_sharma": {
-        "triggers": ["priya", "9876543210"],
-        "required_docs": 3,
-        "negotiation_rates": [11.99, 11.25, 10.25],  # 3 rates: standard → good → best
-        "final_rate": 10.25,  # Absolute minimum
-        "conversation": [
-            {
-                "step": 1,
-                "trigger_keywords": ["priya", "9876543210"],
-                "response": "Hey Priya! 👋 Great to hear from you!\n\nLet me quickly pull up your details... *typing*\n\n⏳ Connecting to our customer database...\n⏳ Fetching your credit profile...\n\nAh perfect! I found you in our system! 🎉\n\n**Your Profile:**\n• Name: Priya Sharma  \n• Phone: 9876543210  \n• Credit Score: **785/900** (That's excellent! 🌟)\n• Pre-approved Limit: Rs 10,00,000\n\nWow, you've got an amazing credit history! This is really going to help speed things up.\n\nSo tell me - how much are you looking to borrow? And what's it for, if you don't mind me asking? 😊",
-                "decision": "INITIAL",
-                "show_upload": False,
-                "extracted": {"name": "Priya Sharma", "phone": "9876543210"},
-                "admin_logs": [
-                    {"agent": "Master Agent", "message": "→ Customer inquiry initiated: Priya Sharma", "type": "info"},
-                    {"agent": "Master Agent", "message": "→ Routing to Verification Agent", "type": "info"},
-                    {"agent": "Verification Agent", "message": "✓ CRM database lookup: SUCCESS", "type": "success"},
-                    {"agent": "Verification Agent", "message": "✓ Credit Score: 785/900 (EXCELLENT)", "type": "success"},
-                    {"agent": "Verification Agent", "message": "→ Returning to Master Agent", "type": "info"}
-                ]
-            },
-            {
-                "step": 2,
-                "trigger_keywords": ["5", "500000", "five", "lakh", "loan", "need", "want"],
-                "response": "Rs 5 lakhs - perfect! That's well within your pre-approved limit! 💪\n\n⏳ Let me route this to our Sales Team...\n⏳ Checking current market rates...\n\n**Initial Offer:**  \n💰 Amount: Rs 5,00,000  \n📈 Interest Rate: **11.99% per annum**  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: Rs 16,643  \n📊 Processing Fee: 2% + GST\n\nThis is our standard rate for personal loans. Your EMI would be around **23% of your monthly income** - very comfortable!\n\nWhat do you think? Would you like to proceed with this, or would you like me to see if I can get you a better rate? 😊",
-                "decision": "OFFER_MADE",
-                "show_upload": False,
-                "negotiation_stage": 1,
-                "current_rate": 11.99,
-                "extracted": {"loan_amount": 500000},
-                "admin_logs": [
-                    {"agent": "Master Agent", "message": "→ Routing to Sales Agent", "type": "info"},
-                    {"agent": "Sales Agent", "message": "💰 Loan request: Rs 5,00,000", "type": "info"},
-                    {"agent": "Trust & Safety Agent", "message": "✓ Running risk assessment", "type": "info"},
-                    {"agent": "Trust & Safety Agent", "message": "✓ Customer profile: LOW RISK", "type": "success"},
-                    {"agent": "Sales Agent", "message": "📊 Initial rate quoted: 11.99%", "type": "info"},
-                    {"agent": "Sales Agent", "message": "⏳ Waiting for customer response", "type": "info"}
-                ]
-            },
-            {
-                "step": 3,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "nego", "can you", "discount"],
-                "response": "I totally understand! Let me check what I can do for you... 🤔\n\n⏳ Consulting with my manager...\n⏳ Checking your excellent credit profile (785!)...\n\nGreat news! I managed to get approval for a much better rate! 🎉\n\n**Improved Offer:**  \n💰 Amount: Rs 5,00,000  \n📈 Interest Rate: **11.25% per annum** ⬇️  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: Rs 16,391  \n💵 **You save: Rs 9,072 over the loan tenure!**\n\nThat's Rs 252/month in savings! And here's the thing - with your excellent profile, this is a really strong offer. Most people with credit scores below 750 don't even qualify for this rate!\n\nPlus, think about it:\n✅ Quick approval process (same day!)\n✅ No hidden charges\n✅ Flexible prepayment options\n✅ Digital processing - everything online!\n\nYou know Priya, in my 5 years of experience, I've seen rates go UP by 0.5-1% in just a few weeks when RBI changes policies. Locking in a good rate NOW is actually a smart financial move!\n\nShall we proceed with this? Or let me try ONE more time to get you an even better rate - though I should warn you, we're very close to our floor rate! 😊",
-                "decision": "OFFER_REVISED",
-                "show_upload": False,
-                "negotiation_stage": 2,
-                "current_rate": 11.25,
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💬 Customer negotiating rate", "type": "info"},
-                    {"agent": "Trust & Safety Agent", "message": "✓ Behavioral check: EXCELLENT", "type": "success"},
-                    {"agent": "Sales Agent", "message": "→ Consulting underwriting for better rate", "type": "info"},
-                    {"agent": "Underwriting Agent", "message": "✓ Approved rate reduction: 11.25%", "type": "success"},
-                    {"agent": "Sales Agent", "message": "📊 Revised offer: 11.25%", "type": "success"},
-                    {"agent": "Sales Agent", "message": "💡 Added persuasion tactics", "type": "info"}
-                ]
-            },
-            {
-                "step": 4,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "still", "more", "try"],
-                "response": "You drive a hard bargain, Priya! 😄 Okay, let me pull out all the stops here...\n\n⏳ Checking with senior management...\n⏳ Reviewing your complete profile (3.5 years stable employment, zero defaults!)...\n⏳ Checking our VIP customer criteria...\n\nAlright, I spoke to my senior manager, and you know what? Your profile is SO strong that we're willing to give you our **absolute best rate** - the same rate we reserve for our VIP and HNI customers!\n\n**🌟 FINAL BEST OFFER - VIP Rate 🌟**  \n💰 Amount: Rs 5,00,000  \n📈 Interest Rate: **10.25% per annum** ⬇️⬇️  \n⏰ Tenure: 36 months  \n💳 Monthly EMI: Rs 16,134  \n💵 **Total savings: Rs 18,324 from initial offer!**\n💵 **Monthly savings: Rs 509/month!**\n\n**This is HUGE, Priya!** Let me tell you why you should grab this RIGHT NOW:\n\n✅ **Lowest rate possible** - Even our own employees get 10.5%!\n✅ **Save Rs 18,324** - That's almost a month's salary!\n✅ **Rate lock valid for 48 hours only** - After that, standard rates apply\n✅ **Same-day approval** - Money in your account within 24 hours!\n✅ **Zero foreclosure charges** - Pay it off early if you want!\n\nHonestly? In my 5 years here, I've only given this rate to 3 customers this month. Your credit score of 785 is what made this possible!\n\n**Here's what happens next:**\nJust upload 3 quick documents (takes 2 minutes!), and I'll push your file to priority processing. You'll have your Rs 5 lakhs by tomorrow!\n\n1️⃣ PAN Card  \n2️⃣ Salary Slip  \n3️⃣ Bank Statement\n\nThis rate won't last - shall we lock it in? Click 📎 below! 🚀",
-                "decision": "FINAL_OFFER",
-                "show_upload": True,
-                "negotiation_stage": 3,
-                "current_rate": 10.25,
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💬 Final negotiation attempt", "type": "info"},
-                    {"agent": "Sales Agent", "message": "→ Escalating to senior management", "type": "info"},
-                    {"agent": "Underwriting Agent", "message": "✓ VIP rate approved: 10.25%", "type": "success"},
-                    {"agent": "Sales Agent", "message": "🎯 FINAL OFFER: 10.25%", "type": "success"},
-                    {"agent": "Sales Agent", "message": "⚠️ This is the absolute minimum rate", "type": "warning"},
-                    {"agent": "Master Agent", "message": "→ Requesting document upload", "type": "info"}
-                ]
-            },
-            {
-                "step": 5,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "nego", "still"],
-                "response": "I really wish I could go lower, but I've genuinely hit our floor rate at 10.25%! 😔\n\nPriya, listen - this is literally the **lowest rate** we can offer. Even our CEO's family members get 10.5%! You're getting something special here.\n\n**What you're getting:**\n✅ 1.74% discount from standard rate\n✅ VIP customer pricing (reserved for top 5% customers)\n✅ Total savings of Rs 18,324\n✅ Rs 509 less EMI every month - that's 3 years of savings!\n\nIf I try to go lower, the system will automatically reject it. Trust me, I've tried before! 😅\n\n**Here's the thing** - this rate is locked for only 48 hours. After that, you'll go back to standard rates (11.99%). And with inflation and RBI rate hikes, rates are only going UP.\n\n**Don't miss this opportunity!** Thousands of people are applying every day, and most of them would kill for this rate!\n\nJust 3 quick documents and we're done:\n\n1️⃣ PAN Card  \n2️⃣ Salary Slip  \n3️⃣ Bank Statement\n\nClick 📎 to upload and let's get you that Rs 5 lakhs TODAY! Time is ticking! ⏰🚀",
-                "decision": "FIRM_FINAL",
-                "show_upload": True,
-                "negotiation_stage": 4,
-                "current_rate": 10.25,
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💬 Customer attempting further negotiation", "type": "info"},
-                    {"agent": "Sales Agent", "message": "✋ Holding firm at 10.25% (floor rate)", "type": "warning"},
-                    {"agent": "Sales Agent", "message": "⏳ Encouraging document upload", "type": "info"}
-                ]
-            },
-            {
-                "step": 7,
-                "docs_uploaded": 1,
-                "response": "Perfect! Got your first document! 📄✅\n\nScanning document...\nVerifying authenticity...\n\nDocument 1 verified successfully!\n\nGreat progress! Just 2 more documents to go:\n\n📄 Still needed:\n• Salary Slip (Nov 2025)\n• Bank Statement (Last 2 months)\n\nPlease upload the next document using the 📎 button below!",
-                "decision": "DOC_VERIFIED",
-                "show_upload": True,
-                "admin_logs": [
-                    {"agent": "Master Agent", "message": "📄 Document 1/3 received", "type": "info"},
-                    {"agent": "Verification Agent", "message": "⏳ Queued for verification", "type": "info"}
-                ]
-            },
-            {
-                "step": 8,
-                "docs_uploaded": 2,
-                "response": "Awesome! Document 2 received! 📄📄✅\n\nProcessing...\nCross-checking with our database...\n\nDocument 2 verified successfully!\n\nYou're almost there! Just 1 more document needed:\n\n📄 Last document:\n• Bank Statement (Oct-Nov 2025)\n\nUpload it using the 📎 button and we'll process your loan immediately!",
-                "decision": "DOC_VERIFIED",
-                "show_upload": True,
-                "admin_logs": [
-                    {"agent": "Master Agent", "message": "📄 Document 2/3 received", "type": "info"}
-                ]
-            },
-            {
-                "step": 9,
-                "docs_uploaded": 3,
-                "response": "Excellent! All 3 documents received! 📄📄📄✅\n\nRunning final verification checks...\nRouting to Verification Agent...\nExtracting PAN details...\n✅ PAN: ABCDE1234F - Verified!\n✅ Name matches perfectly!\n\nAnalyzing your Salary Slip...\n✅ Net Salary: Rs 73,500/month\n✅ Employer: Tech Solutions Pvt Ltd\n✅ Employment Duration: 3.5 years (Very stable!)\n\nReviewing Bank Statement...\n✅ Average Balance: Rs 1,45,000 (Impressive!)\n✅ Regular salary credits every month\n✅ No loan defaults or bounced checks\n✅ Healthy savings pattern!\n\nRouting to Underwriting Agent...\nRunning final eligibility check...\n\n✅ Identity: VERIFIED\n✅ Income: CONFIRMED\n✅ Credit Score: 785 (EXCELLENT)\n✅ EMI-to-Income Ratio: 22% (Very comfortable!)\n✅ Employment: STABLE\n✅ Banking Behavior: EXCELLENT\n\nOkay Priya, I've got some great news for you! 🎊\n\n🎉 LOAN APPROVED! 🎉\n\nYour Approved Loan:\n━━━━━━━━━━━━━━━━━━━━━━━\n💰 Amount: Rs 5,00,000\n📈 Interest Rate: 10.25% per annum\n⏰ Tenure: 36 months\n💳 Monthly EMI: Rs 16,192\n📋 Processing Fee: 2% + GST\n💵 Total Payable: Rs 5,82,912\n━━━━━━━━━━━━━━━━━━━━━━━\n\nWhy we approved this:\n✅ Your credit score is excellent (785)\n✅ 3.5 years of stable employment\n✅ Strong financial health\n✅ Comfortable EMI burden (only 22%!)\n\nCongratulations! 🥳 This is one of the fastest approvals I've seen today!\n\nNext Steps:\n1. Download your sanction letter using the button below\n2. Digital signing link will be sent to your registered mobile\n3. Funds will be disbursed within 24 hours after signing\n\nThank you for choosing us, Priya! Welcome to the family! 🎊\n\nIf you have any questions, I'm here to help! 😊",
-                "decision": "APPROVED",
-                "show_sanction": True,
-                "loan_details": {"amount": 500000, "interest_rate": 10.25, "tenure_months": 36, "monthly_emi": 16192},
-                "admin_logs": [
-                    {"agent": "Master Agent", "message": "📄 Document 3/3 received - Processing", "type": "info"},
-                    {"agent": "Master Agent", "message": "→ Routing to Verification Agent", "type": "info"},
-                    {"agent": "Verification Agent", "message": "⏳ Extracting PAN card data...", "type": "info"},
-                    {"agent": "Verification Agent", "message": "✓ PAN: ABCDE1234F (VALID)", "type": "success"},
-                    {"agent": "Verification Agent", "message": "✓ Name match: 100%", "type": "success"},
-                    {"agent": "Verification Agent", "message": "⏳ Analyzing salary slip...", "type": "info"},
-                    {"agent": "Verification Agent", "message": "✓ Net Salary: Rs 73,500/month", "type": "success"},
-                    {"agent": "Verification Agent", "message": "✓ Employment: 3.5 years (STABLE)", "type": "success"},
-                    {"agent": "Verification Agent", "message": "⏳ Reviewing bank statement...", "type": "info"},
-                    {"agent": "Verification Agent", "message": "✓ Avg Balance: Rs 1,45,000", "type": "success"},
-                    {"agent": "Verification Agent", "message": "✓ No defaults found", "type": "success"},
-                    {"agent": "Verification Agent", "message": "→ Returning to Master Agent", "type": "info"},
-                    {"agent": "Master Agent", "message": "→ Routing to Underwriting Agent", "type": "info"},
-                    {"agent": "Underwriting Agent", "message": "⏳ Final eligibility check...", "type": "info"},
-                    {"agent": "Underwriting Agent", "message": "✓ Credit Score: 785 (EXCELLENT)", "type": "success"},
-                    {"agent": "Underwriting Agent", "message": "✓ EMI burden: 22% (LOW)", "type": "success"},
-                    {"agent": "Underwriting Agent", "message": "✓ All criteria met", "type": "success"},
-                    {"agent": "Underwriting Agent", "message": "✓ APPROVAL GRANTED", "type": "success"},
-                    {"agent": "Underwriting Agent", "message": "→ Returning to Master Agent", "type": "info"},
-                    {"agent": "Master Agent", "message": "→ Routing to Sanction Letter Generator", "type": "info"},
-                    {"agent": "Sanction Letter Generator", "message": "✓ Generating sanction letter...", "type": "success"},
-                    {"agent": "Sanction Letter Generator", "message": "✓ Letter ready for download", "type": "success"},
-                    {"agent": "Sanction Letter Generator", "message": "→ Returning to Master Agent", "type": "info"},
-                    {"agent": "Master Agent", "message": "✅ Application APPROVED - Customer notified", "type": "success"}
-                ],
-                "final": True
-            }
-        ]
-    },
-    "rajesh_kumar": {
-        "triggers": ["rajesh", "9988776655"],
-        "required_docs": 2,
-        "conversation": [
-            {
-                "step": 1,
-                "trigger_keywords": ["rajesh", "9988776655"],
-                "response": "Hi Rajesh! 👋\n\n⏳ Pulling up your profile...\n⏳ Fetching credit report...\n\n**Your Details:**\n• Name: Rajesh Kumar  \n• Phone: 9988776655  \n• Credit Score: **350/900** (Poor)  \n⚠️ **Risk Level:** HIGH\n\n---\n\nOkay, I'm going to be honest with you Rajesh - your credit score is quite low (350). This will significantly impact loan eligibility and rates.\n\nHow much were you looking to borrow? Let me see what options might be available, if any. 🤔",
-                "decision": "HIGH_RISK",
-                "show_upload": False,
-                "extracted": {"name": "Rajesh Kumar", "phone": "9988776655"},
-                "admin_logs": [
-                    {"agent": "Master Agent", "message": "→ Customer inquiry: Rajesh Kumar", "type": "info"},
-                    {"agent": "Verification Agent", "message": "🚨 Credit Score: 350 (VERY POOR)", "type": "error"},
-                    {"agent": "Master Agent", "message": "⚠️ HIGH RISK - Enhanced verification needed", "type": "warning"}
-                ]
-            },
-            {
-                "step": 2,
-                "trigger_keywords": ["15", "1500000", "fifteen", "lakh", "urgent", "business", "self", "employed", "2.5"],
-                "response": "Rs 15 lakhs for business purposes... Let me check this urgently. 🚨\n\n⏳ Running enhanced verification...\n⏳ Cross-checking with fraud databases...\n⏳ Analyzing NPCI records...\n\n**CRITICAL ALERTS DETECTED:**\n\n🚨 **NPCI FRAUD DATABASE:** Phone 9988776655 **FLAGGED**\n🚨 **Multiple Applications:** 8 different NBFCs in last 30 days\n🚨 **Identity Theft Reports:** 2 cases linked to this number\n🚨 **Credit Score:** 350/900 (VERY POOR)\n🚨 **Active Defaults:** Rs 3,45,000 outstanding\n🚨 **Loan Shopping Pattern:** 15 inquiries in 90 days\n\nRajesh, these are extremely serious red flags. Before I can proceed, I need to verify your documents immediately:\n\n1️⃣ **PAN Card**  \n2️⃣ **CIBIL Report**\n\nClick 📎 to upload these documents. I need to verify your identity given these alerts. ⬇️",
-                "decision": "FRAUD_ALERT",
-                "show_upload": True,
-                "extracted": {"loan_amount": 1500000},
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💰 Request: Rs 15,00,000 (HIGH AMOUNT)", "type": "warning"},
-                    {"agent": "Master Agent", "message": "→ Routing to Verification Agent", "type": "info"},
-                    {"agent": "Verification Agent", "message": "⏳ Running fraud checks...", "type": "warning"},
-                    {"agent": "Verification Agent", "message": "🚨 NPCI FRAUD ALERT: ACTIVE", "type": "error"},
-                    {"agent": "Verification Agent", "message": "🚨 Phone flagged across 8 NBFCs", "type": "error"},
-                    {"agent": "Verification Agent", "message": "🚨 Credit Score: 350 (CRITICAL)", "type": "error"},
-                    {"agent": "Master Agent", "message": "⚠️ URGENT: Document verification required", "type": "error"}
-                ]
-            },
-            {
-                "step": 3,
-                "docs_uploaded": 1,
-                "response": "Got the PAN Card. Checking... ⏳\n\n**Document Analysis:**\n✅ PAN: BBQPK1234M  \n⚠️ **PAN Name:** Rajesh Kumar  \n⚠️ **Photo quality suspicious**  \n🚨 **Metadata:** Recent edits detected\n\n📎 Waiting for CIBIL Report...",
-                "decision": "PROCESSING",
-                "show_upload": True,
-                "admin_logs": [
-                    {"agent": "Verification Agent", "message": "📄 PAN Card received", "type": "info"},
-                    {"agent": "Verification Agent", "message": "⏳ Analyzing document...", "type": "warning"},
-                    {"agent": "Trust & Safety Agent", "message": "🔍 Metadata analysis in progress", "type": "warning"},
-                    {"agent": "Trust & Safety Agent", "message": "⚠️ Photo quality suspicious", "type": "warning"},
-                    {"agent": "Trust & Safety Agent", "message": "🚨 Document shows signs of tampering", "type": "error"}
-                ]
-            },
-            {
-                "step": 4,
-                "docs_uploaded": 2,
-                "response": "Both documents received. Running deep verification... 🔍\n\n⏳ Cross-checking PAN with Income Tax records...\n⏳ Analyzing CIBIL data authenticity...\n⏳ Facial recognition on PAN photo...\n⏳ Comparing with NPCI fraud database...\n\n**FINAL VERIFICATION RESULTS:**\n\n❌ PAN document: **TAMPERED** (metadata analysis shows recent edits)  \n❌ CIBIL report: **FORGED** (font inconsistencies detected)  \n❌ Photo mismatch: 87% probability of different person  \n❌ NPCI flag: Confirmed active fraud case  \n❌ Multiple loan rejections: 8 NBFCs in 30 days  \n❌ Credit Score: 350/900 with active defaults  \n❌ Outstanding debt: Rs 3,45,000\n\n━━━━━━━━━━━━━━━━━━━━━━━\n🚫 **APPLICATION REJECTED** 🚫\n━━━━━━━━━━━━━━━━━━━━━━━\n\n**Rejection Reasons:**\n1. Document tampering detected\n2. NPCI fraud database match\n3. Multiple simultaneous loan attempts\n4. Identity verification failed\n5. Credit score 350/900 with active defaults\n6. Outstanding debt: Rs 3,45,000\n\nRajesh, this case has been flagged for investigation and will be reported to:\n• NPCI Fraud Prevention Team\n• Credit Bureau Authorities\n• Law Enforcement (if required)\n\n**This application is permanently REJECTED.**\n\nNo further action can be taken. Thank you.",
-                "decision": "REJECTED_FRAUD",
-                "show_upload": False,
-                "admin_logs": [
-                    {"agent": "Verification Agent", "message": "📄 CIBIL Report received", "type": "info"},
-                    {"agent": "Verification Agent", "message": "⏳ Running deep analysis...", "type": "warning"},
-                    {"agent": "Trust & Safety Agent", "message": "🔍 Cross-checking with IT database", "type": "warning"},
-                    {"agent": "Trust & Safety Agent", "message": "🚨 PAN document TAMPERED", "type": "error"},
-                    {"agent": "Trust & Safety Agent", "message": "🚨 CIBIL report FORGED", "type": "error"},
-                    {"agent": "Trust & Safety Agent", "message": "🚨 Facial recognition: 87% mismatch", "type": "error"},
-                    {"agent": "Trust & Safety Agent", "message": "🚨 NPCI match confirmed", "type": "error"},
-                    {"agent": "Underwriting Agent", "message": "❌ LOAN REJECTED - FRAUD", "type": "error"},
-                    {"agent": "Master Agent", "message": "🚫 Case flagged for investigation", "type": "error"},
-                    {"agent": "Master Agent", "message": "📊 Reporting to authorities", "type": "error"}
-                ]
-            }
-        ]
-    },
-    "amit_patel": {
-        "triggers": ["amit", "9123456789"],
-        "required_docs": 3,
-        "negotiation_rates": [13.99, 13.25, 12.25],  # 3 rates: standard → good → best
-        "final_rate": 12.25,
-        "conversation": [
-            {
-                "step": 1,
-                "trigger_keywords": ["amit", "9123456789"],
-                "response": "Hi Amit! 👋\n\n⏳ Looking up your profile...\n\n**Your Details:**\n• Name: Amit Patel  \n• Phone: 9123456789  \n• Credit Score: **680/900** (Fair - room for improvement!)  \n• Pre-approved Limit: Rs 6,00,000\n\nOkay, so your credit score is decent but not in the excellent range yet. Still, you've got a pre-approved limit!\n\nHow much were you thinking of borrowing? 😊",
-                "decision": "INITIAL",
-                "show_upload": False,
-                "extracted": {"name": "Amit Patel", "phone": "9123456789"},
-                "admin_logs": [
-                    {"agent": "Master Agent", "message": "→ Customer inquiry: Amit Patel", "type": "info"},
-                    {"agent": "Verification Agent", "message": "✓ Credit Score: 680 (FAIR)", "type": "warning"},
-                    {"agent": "Master Agent", "message": "⚠️ Lower credit tier - adjusted rates", "type": "warning"}
-                ]
-            },
-            {
-                "step": 2,
-                "trigger_keywords": ["8", "800000", "eight", "lakh"],
-                "response": "Rs 8 lakhs - got it! 💰\n\nHmm, I see you're asking for Rs 8L but your pre-approved limit is Rs 6L. Let me see what I can do...\n\n⏳ Consulting with underwriting...\n⏳ Checking eligibility...\n\nOkay, I managed to get approval for **Rs 6.5 lakhs** - that's the maximum we can offer based on your current credit profile.\n\n**Initial Offer:**  \n💰 Amount: Rs 6,50,000 (adjusted)  \n📈 Interest Rate: **13.99% per annum**  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: Rs 21,873  \n📊 Processing Fee: 2.5% + GST\n\nI know it's not the full Rs 8L you wanted, but this is safer for your budget. Your EMI would be around **46% of your monthly income** - still manageable.\n\nWhat do you think? Want to proceed with this, or should I try to get you a better rate? 🤔",
-                "decision": "OFFER_MADE",
-                "show_upload": False,
-                "negotiation_stage": 1,
-                "current_rate": 13.99,
-                "extracted": {"loan_amount": 650000},
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💰 Request: Rs 8,00,000", "type": "info"},
-                    {"agent": "Trust & Safety Agent", "message": "✓ Risk check: MEDIUM", "type": "info"},
-                    {"agent": "Trust & Safety Agent", "message": "✓ Credit 680 - acceptable range", "type": "success"},
-                    {"agent": "Underwriting Agent", "message": "⚠️ Exceeds pre-approved limit", "type": "warning"},
-                    {"agent": "Underwriting Agent", "message": "✓ Adjusted to Rs 6,50,000", "type": "success"},
-                    {"agent": "Sales Agent", "message": "📊 Initial rate: 13.99%", "type": "info"}
-                ]
-            },
-            {
-                "step": 3,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "high"],
-                "response": "Totally understand, Amit! Let me work on that rate for you... 💪\n\n⏳ Checking your employment history (2 years - good!)...\n⏳ Reviewing payment patterns...\n⏳ Consulting with underwriting...\n\nGood news! I managed to get a significantly better rate approved! 🎉\n\n**Improved Offer:**  \n💰 Amount: Rs 6,50,000  \n📈 Interest Rate: **13.25% per annum** ⬇️  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: Rs 21,575  \n💵 **You save: Rs 14,304 over the loan tenure!**\n\nThat's Rs 298/month in savings! For a credit score of 680, this is actually a really competitive offer.\n\nHere's why this makes sense for your wedding plans:\n✅ **Affordable EMI** - Only 45% of your income (very manageable!)\n✅ **No collateral needed** - Unsecured loan, no property at risk\n✅ **Quick disbursal** - Money within 48 hours for your wedding expenses\n✅ **Flexible tenure** - 4 years to repay comfortably\n\nPlus, Amit, I've been doing this for years - wedding season is peak time, and rates are going up fast. Last month this same profile was getting 14.5%! You're actually getting a great deal.\n\nWant me to try ONE more time for an even better rate? Though I should warn you, we're approaching our minimum for your credit tier! 😊",
-                "decision": "OFFER_REVISED",
-                "show_upload": False,
-                "negotiation_stage": 2,
-                "current_rate": 13.25,
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💬 Customer negotiating", "type": "info"},
-                    {"agent": "Trust & Safety Agent", "message": "✓ Behavioral check: GOOD", "type": "success"},
-                    {"agent": "Underwriting Agent", "message": "✓ Rate reduced: 13.25%", "type": "success"},
-                    {"agent": "Sales Agent", "message": "💡 Added wedding context persuasion", "type": "info"}
-                ]
-            },
-            {
-                "step": 4,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "still", "one more", "try"],
-                "response": "Alright Amit, you're a tough negotiator! 😄 Let me pull out all the stops...\n\n⏳ Escalating to senior management...\n⏳ Reviewing your complete profile...\n⏳ Checking our minimum rate criteria for credit 680...\n\nOkay, I had to fight for this, but I got it! This is our **absolute best offer** for your credit profile:\n\n**🌟 FINAL BEST OFFER 🌟**  \n💰 Amount: Rs 6,50,000  \n📈 Interest Rate: **12.25% per annum** ⬇️⬇️  \n⏰ Tenure: 48 months  \n💳 Monthly EMI: Rs 21,292  \n💵 **Total savings: Rs 27,888 from initial offer!**\n💵 **Monthly savings: Rs 581/month!**\n\n**Listen Amit, here's the honest truth:**\n\nFor a credit score of 680, this is EXCEPTIONAL. Let me show you what others are getting:\n• Credit 750+: 10-11% (you're just 70 points away!)\n• Credit 680-749: 12-13% (✅ You're at the LOWEST end!)\n• Credit below 680: 14-16%\n\n**Why you should take this NOW:**\n\n✅ **Best rate for your tier** - I'm giving you what people with 720+ scores get!\n✅ **Wedding season pricing** - Rates go up 0.5% in peak season (which is NOW!)\n✅ **Build your credit** - 12 months of on-time payments = 720+ score\n✅ **Refinance option** - Once your score hits 720, we'll refinance you at 11-11.5%!\n✅ **Save Rs 27,888** - Almost Rs 28K in your pocket!\n\n**Here's what happens:**\n1. Upload 3 documents (2 minutes)\n2. Approval in 2 hours\n3. Money in your account within 48 hours\n4. Your wedding expenses are SORTED!\n\nHonestly? If you walk away and come back next week, this rate might not be available. Our rates are reviewed every Monday, and with RBI tightening, they're going UP.\n\n**This is THE deal for your wedding!** 💍\n\nJust 3 documents:\n\n1️⃣ Salary Slip  \n2️⃣ Bank Statement  \n3️⃣ CIBIL Report\n\nShall we lock this in? Click 📎 below! 🚀",
-                "decision": "FINAL_OFFER",
-                "show_upload": True,
-                "negotiation_stage": 3,
-                "current_rate": 12.25,
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💬 Final negotiation", "type": "info"},
-                    {"agent": "Sales Agent", "message": "→ Escalating to senior management", "type": "info"},
-                    {"agent": "Underwriting Agent", "message": "✓ Floor rate approved: 12.25%", "type": "success"},
-                    {"agent": "Sales Agent", "message": "🎯 FINAL OFFER: 12.25%", "type": "success"},
-                    {"agent": "Sales Agent", "message": "⚠️ Floor rate for credit 680", "type": "warning"},
-                    {"agent": "Master Agent", "message": "→ Document upload required", "type": "info"}
-                ]
-            },
-            {
-                "step": 5,
-                "trigger_keywords": ["better", "lower", "less", "reduce", "nego"],
-                "response": "I really wish I could go lower, but 12.25% is genuinely our **floor rate** for credit score 680. 😔\n\nAmit, look - I'm being 100% honest with you. If I try to go below this, the underwriting system will AUTOMATICALLY reject it. It's not me, it's the system rules!\n\n**You're already getting:**\n✅ Best rate for your credit tier (680)\n✅ Same rate as people with 720 score!\n✅ Rs 27,888 total savings\n✅ Refinance option after 12 months\n\n**Think about it:**\n• Your wedding is coming up\n• You need the funds NOW\n• This rate is locked for only 48 hours\n• Next week, rates might be 13-13.5%!\n\n**Smart move:** Take this loan, make on-time payments for 1 year, your score will jump to 720+, and we'll refinance you at 11.5%! You'll save even MORE then!\n\nDon't let a great opportunity slip away! Thousands apply daily, most don't get this rate.\n\n**Your wedding deserves this!** Upload 3 docs and let's GET THIS DONE:\n\n1️⃣ Salary Slip  \n2️⃣ Bank Statement  \n3️⃣ CIBIL Report\n\nClick 📎 NOW! Time is ticking! ⏰🚀",
-                "decision": "FIRM_FINAL",
-                "show_upload": True,
-                "negotiation_stage": 4,
-                "current_rate": 12.25,
-                "admin_logs": [
-                    {"agent": "Sales Agent", "message": "💬 Further negotiation attempted", "type": "info"},
-                    {"agent": "Sales Agent", "message": "✋ Holding firm at 12.25% (absolute floor)", "type": "warning"},
-                    {"agent": "Sales Agent", "message": "💡 Final persuasion tactics deployed", "type": "info"}
-                ]
-            },
-            {
-                "step": 7,
-                "docs_uploaded": 1,
-                "response": "Perfect! First document received! 📄✅\n\nVerifying...\n\nDocument 1 verified!\n\n📄 Still needed (2 more):\n• Bank Statement (Last 2 months)\n• CIBIL Report\n\nPlease upload using the 📎 button below!",
-                "decision": "DOC_VERIFIED",
-                "show_upload": True,
-                "admin_logs": [
-                    {"agent": "Verification Agent", "message": "📄 Doc 1/3 received", "type": "success"}
-                ]
-            },
-            {
-                "step": 8,
-                "docs_uploaded": 2,
-                "response": "Great! Second document received! 📄📄✅\n\nProcessing...\n\nDocument 2 verified!\n\n📄 Last document needed:\n• CIBIL Report\n\nUpload using 📎 button below!",
-                "decision": "DOC_VERIFIED",
-                "show_upload": True,
-                "admin_logs": [
-                    {"agent": "Verification Agent", "message": "📄 Doc 2/3 received", "type": "success"}
-                ]
-            },
-            {
-                "step": 9,
-                "docs_uploaded": 3,
-                "response": "Excellent! All 3 documents received! 📄📄📄✅\n\nFinal verification...\nUnderwriting analysis...\n\n✅ Salary Slip: Rs 47,850/month verified\n✅ Bank Statement: Regular deposits confirmed\n✅ CIBIL: Credit score 680 confirmed\n✅ EMI Burden: 36% (acceptable range)\n\n🎉 LOAN APPROVED! 🎉\n\nAPPROVAL SUMMARY\n━━━━━━━━━━━━━━━━━━━━━━━\n👤 Name: Amit Patel\n💰 Approved Amount: Rs 6,50,000\n📈 Interest Rate: 12.25% per annum\n⏰ Tenure: 48 months\n💳 Monthly EMI: Rs 17,197\n📊 Credit Score: 680 (FAIR)\n✅ Status: CONDITIONALLY APPROVED\n━━━━━━━━━━━━━━━━━━━━━━━\n\nConditions:\n• First 3 EMIs: Auto-debit required\n• Credit monitoring: Active\n• Refinance option: Available after 12 months\n\nNext Steps:\n1. Download your sanction letter using the button below\n2. Digital signing link via SMS\n3. Disbursal within 48 hours\n\nCongratulations Amit! 🎊",
-                "decision": "APPROVED_CONDITIONAL",
-                "show_upload": False,
-                "show_sanction": True,
-                "loan_details": {"amount": 650000, "interest_rate": 12.25, "tenure_months": 48, "monthly_emi": 17197},
-                "admin_logs": [
-                    {"agent": "Verification Agent", "message": "✓ All docs verified", "type": "success"},
-                    {"agent": "Underwriting Agent", "message": "✓ Income confirmed: Rs 47,850", "type": "success"},
-                    {"agent": "Underwriting Agent", "message": "⚠️ EMI burden: 44% (acceptable)", "type": "warning"},
-                    {"agent": "Underwriting Agent", "message": "✅ CONDITIONALLY APPROVED", "type": "success"},
-                    {"agent": "Sanction Letter Generator", "message": "✓ Letter generated", "type": "success"}
-                ]
-            }
-        ]
-    }
-}
 
 # ==================== STATE DEFINITION ====================
 class AgentState(TypedDict):
-    """Complete state maintained throughout the conversation"""
-    # User Input
-    messages: Annotated[List, operator.add]
-    current_message: str
+    """
+    Comprehensive state for the Hub-and-Spoke architecture.
+    This state flows through all agents and maintains conversation context.
+    """
+    # Conversation History
+    conversation_history: List[Dict[str, Any]]  # List of {role, content, timestamp}
+    current_message: str  # Latest user message
     
-    # Extracted Entities
-    name: Optional[str]
-    phone: Optional[str]
-    pan: Optional[str]
-    intent: Optional[str]
+    # User Profile
+    user_profile: Dict[str, Any]  # {name, phone, email, verified, pan}
     
-    # Verification Status
-    customer_verified: bool
-    customer_profile: Optional[Dict[str, Any]]
-    verification_status: Optional[str]
+    # Loan Request Details
+    loan_request: Dict[str, Any]  # {amount, tenure, purpose, type}
     
-    # Risk Analysis
-    trust_score: int  # 0-100
-    trust_reasoning: str
-    fraud_flags: List[str]
+    # Financial Data (from verification)
+    financial_data: Dict[str, Any]  # {credit_score, monthly_income, annual_income, 
+                                     #  existing_debt, debt_to_income_ratio, 
+                                     #  pre_approved_limit, employment_type, company}
     
-    # Decision
-    loan_decision: Optional[str]  # APPROVED, DECLINED, YELLOW_FLAG
-    interest_rate: Optional[float]
-    loan_amount_eligible: Optional[int]
-    conditions: List[str]
+    # Negotiation State
+    negotiation_state: Dict[str, Any]  # {current_offered_rate, floor_rate, 
+                                        #  attempt_count, max_attempts, 
+                                        #  last_offer, emi_amount}
+    
+    # Document State
+    document_state: Dict[str, Any]  # {uploaded_docs, required_docs, 
+                                     #  verification_status, pending_docs}
+    
+    # Trust & Risk Analysis
+    trust_analysis: Dict[str, Any]  # {trust_score, risk_category, fraud_flags, 
+                                     #  behavioral_score, red_flags}
+    
+    # Decision State
+    decision: Dict[str, Any]  # {loan_decision, conditions, decline_reason}
+    
+    # Routing Control
+    next_step: str  # Which agent to route to next
     
     # Response
-    ai_response: str
-    
-    # Metadata
-    conversation_stage: str
-    missing_info: List[str]
-    admin_log: List[Dict[str, Any]]  # For God Mode Dashboard
-    
-    # Demo Mode State
-    demo_script: Optional[str]  # Active demo scenario: priya_sharma, amit_patel, rajesh_kumar
-    demo_step: Optional[int]  # Current step in demo conversation flow
-    docs_uploaded: Optional[int]  # Number of documents uploaded (for multi-doc workflows)
+    ai_response: str  # Final response to send to user
     
     # UI Control Flags
-    show_upload: Optional[bool]  # Show document upload button in UI
-    show_sanction_letter: Optional[bool]  # Show sanction letter download button
-    loan_details: Optional[Dict[str, Any]]  # Loan details for sanction letter (amount, rate, tenure, etc.)
-    is_scripted: Optional[bool]  # Whether response came from script or AI
+    show_upload: bool  # Show document upload button
+    show_sanction_letter: bool  # Show sanction letter download
+    loan_details: Optional[Dict[str, Any]]  # Final approved loan details
+    
+    # Admin Logging
+    admin_log: List[Dict[str, Any]]  # Logs for admin dashboard
+    
+    # Risk Control State (for fraud detection)
+    risk_control: Dict[str, Any]  # {fraud_status, math_check, bank_check, visual_check}
 
 
-# ==================== PYDANTIC MODELS FOR STRUCTURED OUTPUT ====================
-class ExtractedEntities(BaseModel):
-    """Structured output for entity extraction"""
-    name: Optional[str] = Field(None, description="Customer's full name")
-    phone: Optional[str] = Field(None, description="10-digit phone number")
-    pan: Optional[str] = Field(None, description="PAN card number (10 characters)")
-    intent: Optional[Literal["apply", "status_check", "upload_doc", "inquiry", "complaint"]] = Field(
-        None, description="Primary intent of the user"
-    )
-    loan_type: Optional[Literal["personal", "home", "business", "education"]] = Field(
-        None, description="Type of loan requested"
-    )
-    loan_amount: Optional[int] = Field(None, description="Requested loan amount in INR")
-    confidence: float = Field(default=0.5, description="Confidence in extraction (0-1)")
+# ==================== FRAUD DETECTION FUNCTIONS ====================
+def validate_salary_math(extracted_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Mathematical Integrity Check for Salary Slip
+    
+    Validates that: (basic + hra + allowances) - (pf + tax + other_deductions) = net_pay
+    
+    Args:
+        extracted_data: Extracted salary slip data with earnings and deductions
+        
+    Returns:
+        Dict with validation status and details
+    """
+    result = {
+        "status": "PASSED",
+        "calculated_net": 0,
+        "extracted_net": 0,
+        "difference": 0,
+        "details": {}
+    }
+    
+    try:
+        # Extract earnings
+        earnings = extracted_data.get("earnings", {})
+        basic_pay = float(earnings.get("basic_pay", 0) or 0)
+        hra = float(earnings.get("hra", 0) or 0)
+        special_allowances = float(earnings.get("special_allowances", 0) or 0)
+        other_earnings = float(earnings.get("other_earnings", 0) or 0)
+        
+        # Extract deductions
+        deductions = extracted_data.get("deductions", {})
+        pf_deduction = float(deductions.get("pf_deduction", 0) or 0)
+        tax_deduction = float(deductions.get("tax_deduction", 0) or 0)
+        professional_tax = float(deductions.get("professional_tax", 0) or 0)
+        other_deductions = float(deductions.get("other_deductions", 0) or 0)
+        
+        # Calculate expected net
+        total_earnings = basic_pay + hra + special_allowances + other_earnings
+        total_deductions = pf_deduction + tax_deduction + professional_tax + other_deductions
+        calculated_net = total_earnings - total_deductions
+        
+        # Get extracted net
+        extracted_net = float(extracted_data.get("net_salary", 0) or 0)
+        
+        # Also check against gross if available
+        extracted_gross = float(extracted_data.get("gross_salary", 0) or 0)
+        extracted_total_deductions = float(extracted_data.get("total_deductions", 0) or 0)
+        
+        # Calculate difference
+        difference = abs(calculated_net - extracted_net)
+        
+        result["calculated_net"] = calculated_net
+        result["extracted_net"] = extracted_net
+        result["difference"] = difference
+        result["details"] = {
+            "total_earnings": total_earnings,
+            "total_deductions": total_deductions,
+            "earnings_breakdown": {
+                "basic_pay": basic_pay,
+                "hra": hra,
+                "special_allowances": special_allowances,
+                "other_earnings": other_earnings
+            },
+            "deductions_breakdown": {
+                "pf_deduction": pf_deduction,
+                "tax_deduction": tax_deduction,
+                "professional_tax": professional_tax,
+                "other_deductions": other_deductions
+            }
+        }
+        
+        # STRICT CHECK: Allow only ₹10 rounding error
+        if difference > 10:
+            result["status"] = "FRAUD_DETECTED"
+            result["reason"] = f"Internal salary components do not add up to the net pay. Calculated: ₹{calculated_net:,.0f}, Shown: ₹{extracted_net:,.0f}, Difference: ₹{difference:,.0f}"
+        else:
+            result["status"] = "PASSED"
+            result["reason"] = "Salary components verified - mathematics checks out"
+            
+        # Additional check: Gross salary validation if available
+        if extracted_gross > 0 and abs(total_earnings - extracted_gross) > 10:
+            result["status"] = "FRAUD_DETECTED"
+            result["reason"] = f"Earnings don't match gross salary. Calculated: ₹{total_earnings:,.0f}, Gross shown: ₹{extracted_gross:,.0f}"
+            
+    except Exception as e:
+        result["status"] = "ERROR"
+        result["reason"] = f"Could not validate salary math: {str(e)}"
+    
+    return result
 
 
-class TrustAnalysis(BaseModel):
-    """Structured output for trust & safety analysis"""
-    risk_score: int = Field(..., ge=0, le=100, description="Risk score from 0 (safe) to 100 (dangerous)")
-    trust_score: int = Field(..., ge=0, le=100, description="Trust score from 0 (untrusted) to 100 (trusted)")
-    reasoning: str = Field(..., description="Explanation for the scores")
-    red_flags: List[str] = Field(default_factory=list, description="List of concerning behaviors detected")
-    is_scripted: bool = Field(default=False, description="Whether the message appears scripted/bot-like")
-    urgency_level: Literal["low", "medium", "high", "extreme"] = Field(
-        default="low", description="Financial desperation level"
-    )
+def cross_check_bank_statement(salary_data: Dict[str, Any], bank_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Cross-check salary credit in bank statement
+    
+    Validates that salary appears as a credit in bank statement within +/- 5 days
+    
+    Args:
+        salary_data: Extracted salary slip data with net_salary and salary_date
+        bank_data: Extracted bank statement data with transactions
+        
+    Returns:
+        Dict with validation status and details
+    """
+    from datetime import datetime, timedelta
+    
+    result = {
+        "status": "PASSED",
+        "salary_found": False,
+        "matching_transaction": None,
+        "details": {}
+    }
+    
+    try:
+        net_salary = float(salary_data.get("net_salary", 0) or 0)
+        salary_date_str = salary_data.get("salary_date")
+        
+        if not net_salary:
+            result["status"] = "SKIPPED"
+            result["reason"] = "No salary amount to verify"
+            return result
+        
+        # Get credit transactions from bank statement
+        transactions = bank_data.get("transactions", [])
+        credit_summary = bank_data.get("credit_summary", {})
+        salary_credits = credit_summary.get("salary_credits", [])
+        
+        # Parse salary date if available
+        salary_date = None
+        if salary_date_str:
+            try:
+                salary_date = datetime.strptime(salary_date_str, "%Y-%m-%d")
+            except:
+                salary_date = None
+        
+        # Check for matching credit transaction
+        tolerance = 0.05  # 5% tolerance for amount matching
+        date_window = 5  # +/- 5 days
+        
+        matching_found = False
+        matching_transaction = None
+        
+        for txn in transactions:
+            if txn.get("type") != "CREDIT":
+                continue
+                
+            txn_amount = float(txn.get("amount", 0) or 0)
+            
+            # Check amount match (within 5% tolerance or exact)
+            amount_diff = abs(txn_amount - net_salary)
+            amount_match = amount_diff <= (net_salary * tolerance) or amount_diff <= 100
+            
+            if amount_match:
+                # If we have dates, check date window
+                if salary_date and txn.get("date"):
+                    try:
+                        txn_date = datetime.strptime(txn["date"], "%Y-%m-%d")
+                        days_diff = abs((txn_date - salary_date).days)
+                        if days_diff <= date_window:
+                            matching_found = True
+                            matching_transaction = txn
+                            break
+                    except:
+                        # If date parsing fails, still count amount match
+                        matching_found = True
+                        matching_transaction = txn
+                        break
+                else:
+                    # No dates to compare, just use amount match
+                    matching_found = True
+                    matching_transaction = txn
+                    break
+        
+        # Also check salary_credits summary
+        if not matching_found and salary_credits:
+            for credit_amount in salary_credits:
+                amount_diff = abs(float(credit_amount) - net_salary)
+                if amount_diff <= (net_salary * tolerance) or amount_diff <= 100:
+                    matching_found = True
+                    matching_transaction = {"amount": credit_amount, "description": "Salary credit"}
+                    break
+        
+        result["salary_found"] = matching_found
+        result["matching_transaction"] = matching_transaction
+        result["details"] = {
+            "expected_salary": net_salary,
+            "total_credits_found": len([t for t in transactions if t.get("type") == "CREDIT"]),
+            "date_checked": salary_date_str
+        }
+        
+        if matching_found:
+            result["status"] = "PASSED"
+            result["reason"] = f"Salary credit of ₹{net_salary:,.0f} found in bank statement"
+        else:
+            result["status"] = "DISCREPANCY"
+            result["reason"] = f"Salary credit of ₹{net_salary:,.0f} not found in bank statement within the expected date window"
+            
+    except Exception as e:
+        result["status"] = "ERROR"
+        result["reason"] = f"Could not cross-check bank statement: {str(e)}"
+    
+    return result
 
 
-# ==================== GEMINI SETUP ====================
-class GeminiAgent:
+def check_visual_forgery(extracted_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Check visual forgery indicators from Gemini Vision analysis
+    
+    Args:
+        extracted_data: Extracted document data with visual_analysis
+        
+    Returns:
+        Dict with forgery check status
+    """
+    result = {
+        "status": "PASSED",
+        "suspicion_score": 0,
+        "flags": [],
+        "requires_manual_review": False
+    }
+    
+    try:
+        visual = extracted_data.get("visual_analysis", {})
+        
+        if not visual:
+            result["status"] = "SKIPPED"
+            result["reason"] = "No visual analysis data available"
+            return result
+        
+        suspicion_score = int(visual.get("suspicion_score", 0) or 0)
+        result["suspicion_score"] = suspicion_score
+        
+        # Check individual flags
+        if visual.get("font_consistency") == False:
+            result["flags"].append("INCONSISTENT_FONTS")
+        
+        if visual.get("alignment_quality") == False:
+            result["flags"].append("SUSPICIOUS_ALIGNMENT")
+        
+        if visual.get("signs_of_editing") == True:
+            result["flags"].append("EDITING_DETECTED")
+        
+        if visual.get("image_quality") == "poor":
+            result["flags"].append("POOR_QUALITY")
+        
+        # Determine status based on suspicion score
+        if suspicion_score > 70:
+            result["status"] = "MANUAL_REVIEW"
+            result["requires_manual_review"] = True
+            result["reason"] = f"High suspicion score ({suspicion_score}/100) - document flagged for manual review"
+        elif suspicion_score > 40 or len(result["flags"]) >= 2:
+            result["status"] = "WARNING"
+            result["reason"] = f"Moderate suspicion ({suspicion_score}/100) with flags: {', '.join(result['flags'])}"
+        else:
+            result["status"] = "PASSED"
+            result["reason"] = "No significant visual anomalies detected"
+            
+    except Exception as e:
+        result["status"] = "ERROR"
+        result["reason"] = f"Could not check visual forgery: {str(e)}"
+    
+    return result
+
+
+# ==================== ROUTING DECISIONS ====================
+class RoutingDecision(BaseModel):
+    """Structured output for Master Agent routing decisions"""
+    next_agent: Literal["sales", "verification", "underwriting", "trust", "document", "response", "fraud_check"]
+    reasoning: str = Field(description="Brief explanation of why this agent was chosen")
+    extracted_intent: str = Field(description="What the user is trying to do")
+
+
+# ==================== GEMINI LLM WRAPPER ====================
+class GeminiLLM:
     """Wrapper for Google Gemini API interactions"""
     
     def __init__(self, api_key: str):
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash",
             google_api_key=api_key,
             temperature=0.7,
             convert_system_message_to_human=True
         )
         
         self.llm_structured = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash",
             google_api_key=api_key,
-            temperature=0.3,  # Lower temperature for structured extraction
+            temperature=0.2,  # Lower temperature for routing decisions
             convert_system_message_to_human=True
         )
-        
-        # Configure native Gemini SDK for advanced features
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        self.native_model = genai.GenerativeModel('gemini-1.5-flash')
     
-    async def extract_entities(self, user_message: str, conversation_history: List) -> ExtractedEntities:
-        """Extract structured entities using Gemini function calling - NO REGEX"""
-        system_prompt = """You are an expert entity extractor for a loan application system.
-Extract the following information from the user's message - USE NATURAL LANGUAGE UNDERSTANDING, NOT PATTERNS.
-
-Fields to extract:
-- name: Full name of the customer (look for "I am X", "my name is X", "this is X", or just names mentioned)
-- phone: Indian mobile number (10 digits, may have spaces/dashes/+91 - clean it to just digits)
-- pan: PAN card number (10 characters: 5 letters, 4 digits, 1 letter - e.g., ABCDE1234F)
-- intent: What the user wants (apply, status_check, upload_doc, inquiry, complaint)
-- loan_type: Type of loan if mentioned (personal, home, business, education)
-- loan_amount: Amount requested in INR
-
-Intelligence required:
-- If someone says "I need 5 lakhs", extract loan_amount as 500000
-- If phone has spaces "98765 43210", clean to "9876543210"
-- If they say "PAN is ABCDE1234F" or just "ABCDE1234F", extract it
-- Be flexible with phrasing: "My number is", "call me on", "contact on", "phone:", etc.
-
-If information is not present, return None for that field.
-DO NOT use regex patterns - use your language understanding."""
-
-        messages = [
-            SystemMessage(content=system_prompt),
-            *conversation_history[-5:],  # Last 5 messages for context
-            HumanMessage(content=user_message)
-        ]
+    async def generate(self, system_prompt: str, user_message: str, 
+                       conversation_history: List[Dict] = None) -> str:
+        """Generate a response using Gemini"""
+        messages = [SystemMessage(content=system_prompt)]
         
-        structured_llm = self.llm_structured.with_structured_output(ExtractedEntities)
-        result = await structured_llm.ainvoke(messages)
-        return result
-    
-    async def analyze_trust(self, user_message: str, typing_metadata: Optional[Dict] = None) -> TrustAnalysis:
-        """Analyze trust and safety using Gemini"""
-        system_prompt = """You are a fraud detection and trust analysis expert for a financial institution.
-
-Analyze the user's message for:
-1. Financial desperation signals (begging, extreme urgency, sob stories)
-2. Aggression or threatening behavior
-3. Scripted/bot-like patterns (too formal, template language)
-4. Inconsistencies or suspicious claims
-5. Pressure tactics or unrealistic promises
-
-Return:
-- risk_score: 0-100 (0 = completely safe, 100 = clear fraud)
-- trust_score: 0-100 (0 = untrustworthy, 100 = highly trustworthy)
-- reasoning: Clear explanation
-- red_flags: List of specific concerns
-- is_scripted: Whether this looks automated
-- urgency_level: low/medium/high/extreme
-
-Be balanced - most customers are genuine. Only flag real concerns."""
-
-        metadata_context = ""
-        if typing_metadata:
-            metadata_context = f"\n\nTyping Metadata: {json.dumps(typing_metadata)}"
+        # Add conversation history
+        if conversation_history:
+            for msg in conversation_history[-5:]:  # Last 5 messages for context
+                if msg.get("role") == "user":
+                    messages.append(HumanMessage(content=msg["content"]))
+                elif msg.get("role") == "assistant":
+                    messages.append(AIMessage(content=msg["content"]))
         
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Message: {user_message}{metadata_context}")
-        ]
-        
-        structured_llm = self.llm_structured.with_structured_output(TrustAnalysis)
-        result = await structured_llm.ainvoke(messages)
-        return result
-    
-    async def generate_response(
-        self, 
-        decision: Dict[str, Any], 
-        customer_name: str,
-        conversation_context: List,
-        stage: str
-    ) -> str:
-        """Generate natural, empathetic response based on decision - ZERO TEMPLATES"""
-        
-        # Build context-aware prompt that tells Gemini the situation
-        if decision["loan_decision"] == "APPROVED":
-            decision_context = f"""
-The loan has been APPROVED with these details:
-- Customer: {customer_name}
-- Approved Amount: Rs {decision['loan_amount_eligible']:,}
-- Interest Rate: {decision['interest_rate']}%
-- Conditions: {', '.join(decision['conditions']) if decision['conditions'] else 'None - instant approval!'}
-
-Your task: Congratulate the customer enthusiastically. This is great news!
-Mention the rate and amount clearly. Keep it warm and professional.
-If there are conditions, mention them as "just a formality" or "quick verification needed".
-Maximum 60 words. Be celebratory but not over-the-top."""
-
-        elif decision["loan_decision"] == "YELLOW_FLAG":
-            decision_context = f"""
-The loan is CONDITIONALLY APPROVED - we need additional documents:
-- Customer: {customer_name}  
-- Approved Amount: Rs {decision['loan_amount_eligible']:,}
-- Interest Rate: {decision['interest_rate']}%
-- Required Documents: {', '.join(decision['conditions'])}
-
-Your task: Explain this is NOT a rejection - the loan is approved pending verification.
-Be encouraging and helpful. Make document submission sound easy.
-Explain this is standard procedure for their profile.
-Maximum 70 words. Be supportive and clear."""
-
-        elif decision["loan_decision"] == "DECLINED":
-            decline_reason = decision.get('decline_reason', 'current eligibility criteria not met')
-            decision_context = f"""
-Unfortunately, the loan cannot be approved at this time.
-- Customer: {customer_name}
-- Reason: {decline_reason}
-
-Your task: Deliver this news with empathy and professionalism.
-Suggest constructive next steps:
-  - Improving credit score (if that's the issue)
-  - Reducing existing debt (if high DTI)
-  - Reapplying in 6 months after improvements
-  
-Be kind but clear. Don't give false hope. 
-Maximum 80 words. Show you care about their financial future."""
-
-        else:  # Information gathering stage
-            missing_info = decision.get('missing_info', [])
-            decision_context = f"""
-We're still gathering information from the customer.
-Current stage: {stage}
-Missing: {', '.join(missing_info) if missing_info else 'unclear'}
-
-Your task: Politely ask for the missing information.
-Be conversational - don't sound like a form.
-Examples:
-  - Instead of "Please provide name", say "May I have your name?"
-  - Instead of "Enter phone number", say "What's the best number to reach you?"
-
-Keep it friendly and natural. Maximum 50 words."""
-
-        # Now let Gemini generate the response with FULL CREATIVE FREEDOM
-        system_prompt = f"""You are a friendly, professional Tata Capital loan officer having a natural conversation.
-
-Context: {decision_context}
-
-Style guidelines:
-- Sound human and warm, not robotic
-- Use natural phrases, not templates
-- Vary your language based on context
-- If good news: be genuinely happy for them
-- If bad news: show empathy and offer help
-- If asking for info: be conversational
-
-DO NOT use templates. Generate unique, contextual responses every time.
-"""
-
-        messages = [
-            SystemMessage(content=system_prompt),
-            *conversation_context[-3:],  # Recent conversation for continuity
-        ]
+        messages.append(HumanMessage(content=user_message))
         
         response = await self.llm.ainvoke(messages)
         return response.content
+    
+    async def route(self, system_prompt: str, context: str) -> RoutingDecision:
+        """Get structured routing decision from Gemini"""
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=context)
+        ]
+        
+        structured_llm = self.llm_structured.with_structured_output(RoutingDecision)
+        result = await structured_llm.ainvoke(messages)
+        return result
+    
+    async def analyze_document(self, file_data: str, mime_type: str, prompt: str) -> Dict[str, Any]:
+        """
+        Analyze a document image using Gemini Vision API
+        
+        Args:
+            file_data: Base64 encoded image/document data
+            mime_type: MIME type of the file (e.g., 'image/jpeg', 'application/pdf')
+            prompt: Extraction prompt specifying what to extract
+            
+        Returns:
+            Dict with extracted document fields
+        """
+        from langchain_core.messages import HumanMessage
+        import google.generativeai as genai
+        
+        # Configure Gemini
+        api_key = os.environ.get("GEMINI_API_KEY")
+        genai.configure(api_key=api_key)
+        
+        # Use gemini-1.5-flash for vision (supports multimodal)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Create the image part
+        image_part = {
+            "mime_type": mime_type,
+            "data": file_data
+        }
+        
+        # Generate content with vision
+        response = model.generate_content([prompt, image_part])
+        
+        # Parse JSON from response
+        response_text = response.text
+        
+        # Clean up response if it contains markdown code blocks
+        if "```" in response_text:
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+            response_text = response_text.strip()
+        
+        try:
+            extracted = json.loads(response_text)
+            return extracted
+        except json.JSONDecodeError:
+            # Return raw response if JSON parsing fails
+            return {
+                "raw_response": response_text,
+                "confidence": 30,
+                "error": "Could not parse JSON from response"
+            }
 
 
-# ==================== GRAPH NODES ====================
+# ==================== HUB-AND-SPOKE GRAPH ====================
 class LoanAgentGraph:
-    """The main LangGraph state machine"""
+    """
+    Hub-and-Spoke Multi-Agent System for Loan Processing
+    
+    Master Agent (Hub) routes to specialized Worker Agents (Spokes):
+    - Sales Agent: Handles greetings, negotiations, persuasion
+    - Verification Agent: Verifies identity, fetches customer data
+    - Underwriting Agent: Calculates eligibility, rates, EMI
+    - Trust Agent: Analyzes risk, fraud detection
+    - Document Agent: Handles document upload and verification
+    """
     
     def __init__(self, gemini_api_key: str):
-        self.gemini = GeminiAgent(gemini_api_key)
+        self.llm = GeminiLLM(gemini_api_key)
         self.data_provider = MockDataProvider()
         self.graph = self._build_graph()
         
-        # Display system configuration
         print("\n" + "="*60)
-        print("🎯 TATA CAPITAL AI UNDERWRITER - INITIALIZED")
+        print("🏦 TATA CAPITAL AI UNDERWRITER - HUB-AND-SPOKE ARCHITECTURE")
         print("="*60)
-        print(f"📍 Mode: {'🎬 DEMO MODE (Scripted)' if DEMO_MODE else '🤖 PRODUCTION MODE (Gemini AI)'}")
-        if DEMO_MODE:
-            print("   • Zero API costs")
-            print("   • Instant responses")
-            print("   • Perfect for presentations")
-            print("   • Triggers: priya, rajesh, amit")
-        else:
-            print("   • Full Gemini AI intelligence")
-            print("   • Natural language understanding")
-            print("   • Dynamic decision making")
-            print("   • Production-grade processing")
+        print("📍 Mode: PRODUCTION (Full Gemini AI)")
+        print("🔀 Architecture: Hub-and-Spoke Multi-Agent")
+        print("🤖 Agents: Master, Sales, Verification, Underwriting, Trust, Document")
         print("="*60 + "\n")
-        print("✅ LoanAgentGraph ready for requests")
     
     def _build_graph(self) -> StateGraph:
-        """Build the state graph with all nodes and edges"""
+        """Build the Hub-and-Spoke state graph"""
         workflow = StateGraph(AgentState)
         
-        # Add nodes
-        workflow.add_node("listener", self.listener_node)
-        workflow.add_node("gatekeeper", self.gatekeeper_node)
-        workflow.add_node("analyst", self.analyst_node)
-        workflow.add_node("underwriter", self.underwriter_node)
-        workflow.add_node("voice", self.voice_node)
+        # Add all nodes (Hub + Spokes)
+        workflow.add_node("master", self.master_node)
+        workflow.add_node("sales", self.sales_agent_node)
+        workflow.add_node("verification", self.verification_agent_node)
+        workflow.add_node("underwriting", self.underwriting_agent_node)
+        workflow.add_node("trust", self.trust_agent_node)
+        workflow.add_node("document", self.document_agent_node)
+        workflow.add_node("fraud_check", self.risk_control_agent_node)  # NEW: Fraud Detection Agent
+        workflow.add_node("response", self.response_node)
         
-        # Define edges
-        workflow.set_entry_point("listener")
+        # Entry point is always Master
+        workflow.set_entry_point("master")
         
+        # Master routes to appropriate spoke based on next_step
         workflow.add_conditional_edges(
-            "listener",
-            self.route_after_listener,
+            "master",
+            self._route_from_master,
             {
-                "gatekeeper": "gatekeeper",
-                "voice": "voice",  # If missing info, go straight to response
+                "sales": "sales",
+                "verification": "verification",
+                "underwriting": "underwriting",
+                "trust": "trust",
+                "document": "document",
+                "fraud_check": "fraud_check",
+                "response": "response"
             }
         )
         
-        workflow.add_edge("gatekeeper", "analyst")
-        workflow.add_edge("analyst", "underwriter")
-        workflow.add_edge("underwriter", "voice")
-        workflow.add_edge("voice", END)
+        # All spokes return to response node
+        workflow.add_edge("sales", "response")
+        workflow.add_edge("verification", "response")
+        workflow.add_edge("underwriting", "response")
+        workflow.add_edge("trust", "response")
+        workflow.add_edge("document", "response")
+        workflow.add_edge("fraud_check", "response")  # Fraud check also returns to response
+        workflow.add_edge("response", END)
         
         return workflow.compile()
     
-    # ========== SCRIPTED DEMO HANDLER ==========
-    def get_scripted_response(self, state: AgentState) -> Optional[Dict]:
-        """INTERACTIVE STAGED DEMO - Step-by-step conversation flow"""
-        user_msg = state["current_message"].lower().strip()
-        
-        # Get current script state
-        active_script = state.get("demo_script")
-        current_step = state.get("demo_step", 1)  # Start at step 1
-        
-        # STEP 1: Detect which script to activate (on trigger keywords)
-        if not active_script:
-            for script_name, script_data in DEMO_SCRIPTS.items():
-                for trigger in script_data["triggers"]:
-                    if trigger in user_msg:
-                        active_script = script_name
-                        state["demo_script"] = script_name
-                        state["demo_step"] = 1  # Set to step 1
-                        current_step = 1
-                        print(f"\n{'='*60}")
-                        print(f"🚀 SYSTEM MODE: 🎬 DEMO MODE")
-                        print(f"{'='*60}\n")
-                        print(f"🎬 SCRIPT ACTIVATED: {script_name.upper()}")
-                        break
-                if active_script:
-                    break
-            
-            # No script matched - return None (will use AI)
-            if not active_script:
-                return None
-        
-        # STEP 2: Get script data
-        script = DEMO_SCRIPTS.get(active_script)
-        if not script:
-            print(f"⚠️ Script {active_script} not found")
-            return None
-        
-        # STEP 3: Find the matching step based on user input AND docs_uploaded count
-        matching_step = None
-        docs_uploaded = state.get("docs_uploaded", 0)
-        
-        for step_obj in script["conversation"]:
-            # PRIORITY 1: Document upload steps (match by docs_uploaded count)
-            if "docs_uploaded" in step_obj:
-                if step_obj["docs_uploaded"] == docs_uploaded:
-                    matching_step = step_obj
-                    break
-            # PRIORITY 2: Regular conversation steps (match by keywords)
-            elif "trigger_keywords" in step_obj:
-                keywords = step_obj["trigger_keywords"]
-                # Check if ANY keyword matches the user message
-                if any(keyword.lower() in user_msg for keyword in keywords):
-                    matching_step = step_obj
-                    break
-        
-        # If no matching step found, provide helpful guidance based on current step
-        if not matching_step:
-            print(f"⚠️ No matching step found for input '{user_msg}' (docs: {docs_uploaded}) in script {active_script}")
-            current_step_num = state.get("demo_step", 1)
-            
-            # Provide context-aware guidance
-            if current_step_num == 1:
-                return {
-                    "response": "I'd love to help! But first, could you tell me how much loan amount you're looking for?\n\nFor example, you can say: \"I need 5 lakhs\" or \"I want to borrow 3 lakh rupees\"",
-                    "show_upload": False,
-                    "show_sanction": False,
-                    "admin_logs": [{"agent": "Master Agent", "message": "Clarifying loan amount requirement", "type": "info"}],
-                    "is_scripted": True
-                }
-            elif current_step_num == 2:
-                return {
-                    "response": "Great question! To move forward with your loan application, I'll need you to upload the required documents.\n\nPlease click the 📎 upload button below to submit your documents. You can upload them one by one!",
-                    "show_upload": True,
-                    "show_sanction": False,
-                    "admin_logs": [{"agent": "Master Agent", "message": "Reminding about document upload", "type": "info"}],
-                    "is_scripted": True
-                }
-            else:
-                # During document upload phase
-                # Get required docs list based on active script
-                script_data = DEMO_SCRIPTS.get(active_script, {})
-                required_docs_count = script_data.get("required_docs", 3)
-                docs_uploaded = state.get("docs_uploaded", 0)
-                remaining = required_docs_count - docs_uploaded
-                
-                if active_script == "priya_sharma":
-                    if remaining == 3:
-                        docs_list = "\n• PAN Card\n• Salary Slip (Nov 2025)\n• Bank Statement (Last 2 months)"
-                    elif remaining == 2:
-                        docs_list = "\n• Salary Slip (Nov 2025)\n• Bank Statement (Last 2 months)"
-                    elif remaining == 1:
-                        docs_list = "\n• Bank Statement (Oct-Nov 2025)"
-                    else:
-                        docs_list = ""
-                elif active_script == "amit_patel":
-                    if remaining == 3:
-                        docs_list = "\n• Salary Slip\n• Bank Statement (Last 2 months)\n• CIBIL Report"
-                    elif remaining == 2:
-                        docs_list = "\n• Bank Statement (Last 2 months)\n• CIBIL Report"
-                    elif remaining == 1:
-                        docs_list = "\n• CIBIL Report"
-                    else:
-                        docs_list = ""
-                elif active_script == "rajesh_kumar":
-                    if remaining == 2:
-                        docs_list = "\n• PAN Card\n• CIBIL Report"
-                    elif remaining == 1:
-                        docs_list = "\n• CIBIL Report"
-                    else:
-                        docs_list = ""
-                else:
-                    docs_list = ""
-                
-                return {
-                    "response": f"I'm currently processing your application. Please continue uploading the required documents using the 📎 button below.\n\n📄 Documents needed ({remaining} remaining):{docs_list}\n\nOnce all documents are received, I'll complete your verification! 😊",
-                    "show_upload": True,
-                    "show_sanction": False,
-                    "admin_logs": [{"agent": "Master Agent", "message": f"Waiting for {remaining} more documents", "type": "info"}],
-                    "is_scripted": True
-                }
-        
-        step_data = matching_step
-        next_step = step_data["step"] + 1
-        
-        # STEP 4: Update state with extracted data
-        if "extracted" in step_data:
-            for key, value in step_data["extracted"].items():
-                state[key] = value
-        
-        # STEP 5: Set decision and loan details
-        if "decision" in step_data:
-            state["loan_decision"] = step_data["decision"]
-            if step_data["decision"] == "APPROVED":
-                state["loan_amount_eligible"] = step_data.get("loan_details", {}).get("amount", 500000)
-                state["interest_rate"] = step_data.get("loan_details", {}).get("interest_rate", 10.5)
-            elif step_data["decision"] == "DECLINED":
-                state["loan_amount_eligible"] = 0
-        
-        # STEP 6: Increment step for next message
-        state["demo_step"] = next_step
-        
-        # STEP 7: Mark as final if specified
-        if step_data.get("final"):
-            state["demo_complete"] = True
-        
-        print(f"📝 STEP {step_data['step']}/{len(script['conversation'])} | {active_script}")
-        print(f"⚡ INSTANT RESPONSE | Script: {active_script}")
-        
-        # STEP 8: Return response with UI flags and admin logs
-        return {
-            "response": step_data["response"],
-            "show_upload": step_data.get("show_upload", False),
-            "show_sanction": step_data.get("show_sanction", False),
-            "loan_details": step_data.get("loan_details"),
-            "admin_logs": step_data.get("admin_logs", []),
-            "is_scripted": True
-        }
+    def _route_from_master(self, state: AgentState) -> str:
+        """Route from master to appropriate spoke"""
+        return state.get("next_step", "response")
     
-    # ========== NODE A: LISTENER (Entity Extractor) ==========
-    async def listener_node(self, state: AgentState) -> AgentState:
+    # ==================== MASTER NODE (HUB) ====================
+    async def master_node(self, state: AgentState) -> AgentState:
         """
-        NODE A: Entity Extraction & Message Understanding
+        MASTER AGENT (Hub)
         
-        DUAL MODE ARCHITECTURE:
-        - DEMO_MODE = True  → Use scripted flows (instant, no API)
-        - DEMO_MODE = False → Use Gemini AI (intelligent, real NLP)
+        Responsibilities:
+        1. Analyze user's message and current state
+        2. Decide which Worker Agent should handle the request
+        3. Route to appropriate spoke
         """
         log_entry = {
-            "node": "listener",
+            "agent": "Master Agent",
             "timestamp": datetime.now().isoformat(),
-            "action": "entity_extraction"
+            "action": "routing_decision"
         }
         
-        # =========================================================
-        # MODE 1: DEMO MODE (Scripted Flows)
-        # =========================================================
-        if DEMO_MODE:
-            print("🎬 DEMO MODE ACTIVE - Using scripted responses")
+        user_message = state["current_message"]
+        user_message_lower = user_message.lower().strip()
+        
+        # Check if user is confirming their identity (pending_match flow)
+        pending_match = state.get("user_profile", {}).get("pending_match")
+        if pending_match:
+            confirmation_phrases = ["yes", "that's me", "thats me", "yes that's me", "correct", "yep", "yeah", "confirm", "that is me"]
+            if any(phrase in user_message_lower for phrase in confirmation_phrases):
+                # User confirmed - route to verification to complete the process
+                state["user_profile"]["confirmed_match"] = True
+                state["next_step"] = "verification"
+                log_entry["routing"] = "verification"
+                log_entry["reasoning"] = "User confirmed their identity"
+                log_entry["message"] = "→ Routing to Verification Agent: User confirmed identity"
+                log_entry["type"] = "info"
+                state.setdefault("admin_log", []).append(log_entry)
+                return state
+        
+        # Check user type for differentiated routing (Existing vs New Prospect)
+        user_type = state.get("user_profile", {}).get("user_type")
+        is_new_lead = state.get("user_profile", {}).get("is_new_lead", False)
+        is_verified = state.get("user_profile", {}).get("verified", False)
+        financial_data = state.get("financial_data", {})
+        
+        # NEW PROSPECT HANDLING - Need to collect data first before underwriting
+        if is_new_lead and is_verified:
+            # Check if we have salary info
+            monthly_income = financial_data.get("monthly_income")
+            credit_score = financial_data.get("credit_score")
             
-            # Check for scripted response
-            scripted = self.get_scripted_response(state)
-            if scripted:
-                print(f"⚡ INSTANT RESPONSE | Script: {state.get('demo_script', 'Unknown')}")
-                state["ai_response"] = scripted["response"]
-                state["show_upload"] = scripted.get("show_upload", False)
-                state["show_sanction_letter"] = scripted.get("show_sanction", False)
-                state["loan_details"] = scripted.get("loan_details")
-                state["is_scripted"] = True
-                
-                # Add admin logs for agent orchestration visibility
-                if "admin_logs" in scripted:
-                    state.setdefault("admin_log", []).extend(scripted["admin_logs"])
-                
-                # DYNAMIC TRUST SCORE & BEHAVIORAL ANALYSIS based on script progression
-                active_script = state.get("demo_script", "")
-                current_step = state.get("demo_step", 1)
-                docs_uploaded = state.get("docs_uploaded", 0)
-                
-                # Calculate dynamic trust score and behavioral metrics
-                if "priya" in active_script.lower():
-                    # Priya: Starts at 65, increases to 90 as documents are verified (reduced steps: 1-5 instead of 1-6)
-                    if current_step == 1:
-                        state["trust_score"] = 65
-                        behavioral_score = 70
-                        risk_category = "LOW"
-                    elif current_step == 2:
-                        state["trust_score"] = 67
-                        behavioral_score = 73
-                        risk_category = "LOW"
-                    elif current_step == 3:
-                        state["trust_score"] = 69  # First negotiation
-                        behavioral_score = 76
-                        risk_category = "LOW"
-                    elif current_step == 4:
-                        state["trust_score"] = 71  # Final offer (VIP rate)
-                        behavioral_score = 79
-                        risk_category = "LOW"
-                    elif current_step == 5:
-                        state["trust_score"] = 73  # Firm final (if they still negotiate)
-                        behavioral_score = 82
-                        risk_category = "LOW"
-                    elif docs_uploaded == 1:
-                        state["trust_score"] = 78
-                        behavioral_score = 85
-                        risk_category = "LOW"
-                    elif docs_uploaded == 2:
-                        state["trust_score"] = 82
-                        behavioral_score = 88
-                        risk_category = "LOW"
-                    elif docs_uploaded == 3:
-                        state["trust_score"] = 90
-                        behavioral_score = 95
-                        risk_category = "LOW"
-                    else:
-                        state["trust_score"] = 71
-                        behavioral_score = 79
-                        risk_category = "LOW"
-                        
-                elif "amit" in active_script.lower():
-                    # Amit: Starts at 55, increases to 75 with documents (reduced steps: 1-5 instead of 1-6)
-                    if current_step == 1:
-                        state["trust_score"] = 55
-                        behavioral_score = 65
-                        risk_category = "MEDIUM"
-                    elif current_step == 2:
-                        state["trust_score"] = 57
-                        behavioral_score = 67
-                        risk_category = "MEDIUM"
-                    elif current_step == 3:
-                        state["trust_score"] = 59  # First negotiation
-                        behavioral_score = 69
-                        risk_category = "MEDIUM"
-                    elif current_step == 4:
-                        state["trust_score"] = 61  # Final offer (floor rate)
-                        behavioral_score = 71
-                        risk_category = "MEDIUM"
-                    elif current_step == 5:
-                        state["trust_score"] = 63  # Firm final (if they still negotiate)
-                        behavioral_score = 73
-                        risk_category = "MEDIUM"
-                    elif docs_uploaded == 1:
-                        state["trust_score"] = 68
-                        behavioral_score = 75
-                        risk_category = "MEDIUM"
-                    elif docs_uploaded == 2:
-                        state["trust_score"] = 70
-                        behavioral_score = 78
-                        risk_category = "MEDIUM"
-                    elif docs_uploaded == 3:
-                        state["trust_score"] = 75
-                        behavioral_score = 82
-                        risk_category = "MEDIUM"
-                    else:
-                        state["trust_score"] = 61
-                        behavioral_score = 71
-                        risk_category = "MEDIUM"
-                        
-                elif "rajesh" in active_script.lower():
-                    # Rajesh: Starts at 35, decreases to 10 as fraud detected
-                    if current_step == 1:
-                        state["trust_score"] = 35
-                        behavioral_score = 40
-                        risk_category = "HIGH"
-                    elif current_step == 2:
-                        state["trust_score"] = 25  # Fraud alerts detected
-                        behavioral_score = 28
-                        risk_category = "CRITICAL"
-                    elif docs_uploaded == 1:
-                        state["trust_score"] = 20  # Document tampering suspected
-                        behavioral_score = 22
-                        risk_category = "CRITICAL"
-                    elif docs_uploaded == 2:
-                        state["trust_score"] = 10  # Fraud confirmed
-                        behavioral_score = 15
-                        risk_category = "FRAUD_CONFIRMED"
-                    else:
-                        state["trust_score"] = 30
-                        behavioral_score = 35
-                        risk_category = "HIGH"
-                else:
-                    state["trust_score"] = 50  # Default neutral
-                    behavioral_score = 50
-                    risk_category = "UNKNOWN"
-                
-                # Create/update customer profile with hardcoded demo data
-                # Extract customer details from the matched script
-                customer_name = "Unknown"
-                customer_phone = "Unknown"
-                customer_credit_score = 0
-                
-                if "priya" in active_script.lower():
-                    customer_name = "Priya Sharma"
-                    customer_phone = "9876543210"
-                    customer_credit_score = 785
-                elif "amit" in active_script.lower():
-                    customer_name = "Amit Patel"
-                    customer_phone = "9123456789"
-                    customer_credit_score = 680
-                elif "rajesh" in active_script.lower():
-                    customer_name = "Rajesh Kumar"
-                    customer_phone = "9988776655"
-                    customer_credit_score = 350
-                
-                # Store in state for persistence
-                state["name"] = customer_name
-                state["phone"] = customer_phone
-                state["credit_score"] = customer_credit_score
-                
-                # Create complete customer profile
-                state["customer_profile"] = {
-                    "name": customer_name,
-                    "phone": customer_phone,
-                    "credit_score": customer_credit_score,
-                    "behavioral_flags": {
-                        "risk_category": risk_category,
-                        "behavioral_score": behavioral_score,
-                        "urgency_level": "HIGH" if "rajesh" in active_script.lower() else "MEDIUM",
-                        "conversation_quality": "EXCELLENT" if "priya" in active_script.lower() else "GOOD" if "amit" in active_script.lower() else "POOR",
-                        "document_authenticity": "VERIFIED" if docs_uploaded >= 2 and "priya" in active_script.lower() else "PENDING" if docs_uploaded < 2 else "SUSPICIOUS" if "rajesh" in active_script.lower() else "UNDER_REVIEW"
-                    }
-                }
-                
-                log_entry["mode"] = "demo_scripted"
-                log_entry["script"] = state.get("demo_script")
+            # Check if user is providing salary/income information
+            salary_keywords = ["salary", "income", "earn", "monthly", "per month", "pm", "lpa", "lakhs per", "k per month", "rupees"]
+            amount_patterns = any(char.isdigit() for char in user_message)
+            
+            if (any(kw in user_message_lower for kw in salary_keywords) or amount_patterns) and not monthly_income:
+                # User might be sharing salary - route to underwriting to extract and store
+                state["next_step"] = "underwriting"
+                log_entry["routing"] = "underwriting"
+                log_entry["reasoning"] = "New prospect providing income details - collecting data"
+                log_entry["message"] = "→ Routing to Underwriting Agent: Collecting income data from new prospect"
+                log_entry["type"] = "info"
                 state.setdefault("admin_log", []).append(log_entry)
                 return state
             
-            # No script matched - provide friendly generic response
-            print("⚠️ No demo script matched - providing generic response")
-            state["ai_response"] = "Hey there! 👋 I'm your AI Loan Assistant from Tata Capital.\n\nI can help you get a personal loan approved in minutes! Just tell me your name and phone number to get started.\n\nFor example: \"Hi, I'm Priya and my number is 9876543210\""
-            state["conversation_stage"] = "initial"
-            state["is_scripted"] = True
-            log_entry["mode"] = "demo_welcome"
+            # If no salary yet, prompt for it
+            if not monthly_income:
+                # Check if they're asking for loan without providing salary first
+                loan_keywords = ["loan", "borrow", "lakh", "lakhs", "need money", "credit"]
+                if any(kw in user_message_lower for kw in loan_keywords):
+                    state["next_step"] = "underwriting"
+                    log_entry["routing"] = "underwriting"
+                    log_entry["reasoning"] = "New prospect asking about loan - need to collect financial info first"
+                    log_entry["type"] = "info"
+                    state.setdefault("admin_log", []).append(log_entry)
+                    return state
+        
+        # Build context for routing decision
+        context = f"""
+CURRENT USER MESSAGE: "{user_message}"
+
+CURRENT STATE:
+- User Profile: {json.dumps(state.get('user_profile', {}), indent=2)}
+- Loan Request: {json.dumps(state.get('loan_request', {}), indent=2)}
+- Financial Data: {json.dumps(state.get('financial_data', {}), indent=2)}
+- Negotiation State: {json.dumps(state.get('negotiation_state', {}), indent=2)}
+- Document State: {json.dumps(state.get('document_state', {}), indent=2)}
+- Trust Analysis: {json.dumps(state.get('trust_analysis', {}), indent=2)}
+
+CONVERSATION HISTORY (last 3 messages):
+{json.dumps(state.get('conversation_history', [])[-3:], indent=2)}
+"""
+        
+        routing_prompt = """You are the Master Router Agent for Tata Capital's AI Loan System.
+
+Your job is to analyze the user's message and current state, then decide which specialized agent should handle this request.
+
+ROUTING RULES:
+1. SALES AGENT - Route here if:
+   - User sends greeting (hi, hello, hey, good morning, etc.)
+   - User is negotiating interest rate (asking for lower rate, better deal, discount)
+   - User needs persuasion or has objections
+   - User is asking general questions about the loan process
+   - User accepts or shows interest in proceeding
+
+2. VERIFICATION AGENT - Route here if:
+   - User provides their name, phone number, or PAN
+   - User needs identity verification
+   - User profile is empty and they're sharing personal details
+   - Need to fetch customer data from database
+
+3. UNDERWRITING AGENT - Route here if:
+   - User mentions loan amount they want (e.g., "I need 5 lakhs", "want to borrow 3 lakh")
+   - User asks about eligibility or how much they can get
+   - User asks about EMI calculation
+   - Need to calculate interest rates based on credit profile
+   - User asks about loan tenure or repayment
+
+4. TRUST AGENT - Route here if:
+   - Suspicious behavior detected
+   - Need to analyze risk before proceeding
+   - User's responses seem inconsistent or fraudulent
+   - High-risk profile needs additional verification
+
+5. DOCUMENT AGENT - Route here if:
+   - User mentions uploading documents
+   - User says they've uploaded or want to upload files
+   - Document verification is pending
+   - User asks what documents are needed
+
+6. FRAUD_CHECK AGENT - Route here if:
+   - Documents have been uploaded and need fraud verification
+   - Salary slip needs mathematical validation
+   - Bank statement needs cross-checking with salary
+   - Visual forgery analysis is required
+   - Document authenticity is in question
+
+7. RESPONSE AGENT - Route here if:
+   - A direct response can be generated without specialized processing
+   - Simple acknowledgment needed
+
+Analyze the message carefully and choose the MOST appropriate agent."""
+
+        try:
+            routing = await self.llm.route(routing_prompt, context)
+            state["next_step"] = routing.next_agent
+            
+            log_entry["routing"] = routing.next_agent
+            log_entry["reasoning"] = routing.reasoning
+            log_entry["intent"] = routing.extracted_intent
+            log_entry["message"] = f"→ Routing to {routing.next_agent.upper()} Agent: {routing.reasoning}"
+            log_entry["type"] = "info"
+            
+            print(f"🔀 MASTER: Routing to {routing.next_agent.upper()} - {routing.reasoning}")
+            
+        except Exception as e:
+            print(f"❌ Master routing error: {e}")
+            state["next_step"] = "sales"  # Default to sales on error
+            log_entry["error"] = str(e)
+            log_entry["message"] = "→ Defaulting to Sales Agent due to routing error"
+            log_entry["type"] = "warning"
+        
+        state.setdefault("admin_log", []).append(log_entry)
+        return state
+    
+    # ==================== SALES AGENT (SPOKE) ====================
+    async def sales_agent_node(self, state: AgentState) -> AgentState:
+        """
+        SALES AGENT
+        
+        Responsibilities:
+        1. Handle greetings and initial contact
+        2. Negotiate interest rates with persuasion
+        3. Guide customer through the loan process
+        4. Handle objections and concerns
+        """
+        log_entry = {
+            "agent": "Sales Agent",
+            "timestamp": datetime.now().isoformat(),
+            "action": "sales_interaction"
+        }
+        
+        user_profile = state.get("user_profile", {})
+        negotiation = state.get("negotiation_state", {})
+        financial = state.get("financial_data", {})
+        loan_request = state.get("loan_request", {})
+        
+        try:
+            # Build sales context - PHASE 4 ENHANCEMENT
+            customer_name = user_profile.get("name", "valued customer")
+            credit_score = financial.get("credit_score", 0)
+            current_rate = negotiation.get("current_offered_rate")
+            floor_rate = negotiation.get("floor_rate")
+            attempt_count = negotiation.get("attempt_count", 0)
+            loan_amount = loan_request.get("amount", 0)
+            
+            # Get underwriting decision from strict rule engine
+            underwriting_decision = loan_request.get("underwriting_decision")
+            underwriting_reason = loan_request.get("underwriting_reason")
+            
+            # PHASE 4: Handle different underwriting decisions
+            if underwriting_decision == "REJECT":
+                state["ai_response"] = f"""I understand your interest in a personal loan, {customer_name}. 
+
+Unfortunately, after running our assessment, I'm unable to approve your application at this time. Here's why:
+
+**{underwriting_reason}**
+
+**Tips to improve your eligibility:**
+• Work on improving your credit score through timely payments
+• Pay down existing debts to improve your debt-to-income ratio  
+• Consider applying for a smaller loan amount
+• Wait 3-6 months and apply again
+
+I'm here to help you succeed financially! Would you like tips on credit improvement?"""
+            
+            elif underwriting_decision == "APPROVE_INSTANT":
+                emi = loan_request.get("emi", 0)
+                state["ai_response"] = f"""🎉 Fantastic news, {customer_name}! 
+
+**Your loan is INSTANTLY APPROVED!**
+
+**Loan Details:**
+💰 Amount: ₹{loan_amount:,}
+📈 Interest Rate: {current_rate}% per annum  
+💳 Monthly EMI: ₹{emi:,}
+⏰ Tenure: 36 months
+
+**Reason:** {underwriting_reason}
+
+Would you like to proceed with this offer, or would you like me to see if I can get you a **better rate**?"""
+            
+            elif underwriting_decision == "APPROVE_WITH_DOCS":
+                emi = loan_request.get("emi", 0)
+                state["ai_response"] = f"""Great news, {customer_name}! 
+
+**Your loan is CONDITIONALLY APPROVED!**
+
+**Loan Details:**
+💰 Amount: ₹{loan_amount:,}
+📈 Interest Rate: {current_rate}% per annum  
+💳 Monthly EMI: ₹{emi:,}
+⏰ Tenure: 36 months
+
+**Condition:** Please upload your salary slip for income verification.
+
+**Reason:** {underwriting_reason}
+
+Would you like to proceed, or shall I try to get you a better rate first?"""
+            
+            else:
+                # Standard sales flow
+                sales_prompt = f"""You are a professional Tata Capital loan officer. Be warm but professional.
+
+CONTEXT:
+- Customer: {customer_name}  
+- Credit Score: {credit_score}
+- Loan Amount: ₹{loan_amount:,}
+- Current Rate: {current_rate}%
+- Floor Rate: {floor_rate}%  
+- Negotiation Attempts: {attempt_count}
+
+PERSONA: Helpful, warm, and professional loan officer.
+
+NEGOTIATION RULES:
+- Each attempt can reduce rate by 0.25% until floor_rate
+- If at floor_rate and attempt_count >= 3: "This is the absolute best I can do for a premium customer like you."
+- Highlight benefits and urgency when offering better rates"""
+
+                response = await self.llm.generate(
+                    sales_prompt,
+                    state["current_message"],
+                    state.get("conversation_history", [])
+                )
+                state["ai_response"] = response
+            
+            # PHASE 4: Negotiation Logic with Floor Rate
+            user_msg_lower = state["current_message"].lower()
+            negotiation_keywords = ["lower", "reduce", "less", "better", "discount", "negotiate"]
+            
+            if current_rate and floor_rate and any(kw in user_msg_lower for kw in negotiation_keywords):
+                new_count = attempt_count + 1
+                state["negotiation_state"]["attempt_count"] = new_count
+                
+                # Reduce rate if not at floor
+                if current_rate > floor_rate:
+                    reduction = 0.25  # Fixed 0.25% reduction per attempt
+                    new_rate = max(floor_rate, round(current_rate - reduction, 2))
+                    state["negotiation_state"]["current_offered_rate"] = new_rate
+                    log_entry["rate_change"] = f"{current_rate}% → {new_rate}%"
+                    
+                    # Update response for negotiation
+                    if new_rate == floor_rate and new_count >= 2:
+                        state["ai_response"] += f"\n\n**Special Rate: {new_rate}%** - This is the absolute best I can do for a premium customer like you. This rate is locked for 48 hours only!"
+                    else:
+                        state["ai_response"] += f"\n\n**Better Rate: {new_rate}%** - I managed to get you a better deal!"
+                else:
+                    state["ai_response"] += f"\n\nI understand you'd like a lower rate, but {floor_rate}% is truly the absolute best rate we can offer for your profile. This is already a premium rate reserved for our best customers!"
+                
+                log_entry["negotiation_attempt"] = new_count
+            
+        except Exception as e:
+            print(f"❌ Sales Agent error: {e}")
+            state["ai_response"] = "Hello! Welcome to Tata Capital! 👋 I'm here to help you with your personal loan needs. Could you please share your name and phone number so I can check your eligibility?"
+            log_entry["error"] = str(e)
+            log_entry["type"] = "warning"
+        
+        state.setdefault("admin_log", []).append(log_entry)
+        return state
+    
+    # ==================== VERIFICATION AGENT (SPOKE) ====================
+    async def verification_agent_node(self, state: AgentState) -> AgentState:
+        """
+        VERIFICATION AGENT
+        
+        Responsibilities:
+        1. Extract name, phone, PAN from user message
+        2. Verify customer against database
+        3. Fetch and populate financial data
+        4. Update user profile
+        """
+        log_entry = {
+            "agent": "Verification Agent",
+            "timestamp": datetime.now().isoformat(),
+            "action": "identity_verification"
+        }
+        
+        user_message = state["current_message"]
+        customer_data = None
+        match_type = None
+        
+        # Get current verified user info
+        current_user_name = state.get("user_profile", {}).get("name")
+        is_verified = state.get("user_profile", {}).get("verified", False)
+        
+        # Check if user is claiming to be someone different while already verified
+        if is_verified and current_user_name:
+            # Extract name from current message to check for mismatch
+            name_check_prompt = """Extract ONLY the person's name from this message. Return just the name or "none" if no name is mentioned.
+Examples:
+- "i am tanisha" -> "tanisha"
+- "my name is raj" -> "raj"
+- "how are you" -> "none"
+- "I need a loan" -> "none"
+"""
+            try:
+                name_response = await self.llm.generate(name_check_prompt, user_message, [])
+                claimed_name = name_response.strip().lower().replace('"', '').replace("'", "")
+                
+                if claimed_name and claimed_name != "none" and claimed_name != "null":
+                    # User mentioned a name - check if it matches current verified user
+                    current_name_lower = current_user_name.lower()
+                    current_first_name = current_name_lower.split()[0] if current_name_lower else ""
+                    
+                    # If the claimed name doesn't match the verified user
+                    if claimed_name not in current_name_lower and current_first_name not in claimed_name:
+                        log_entry["message"] = f"⚠️ Identity mismatch: User claims to be '{claimed_name}' but is verified as '{current_user_name}'"
+                        log_entry["type"] = "warning"
+                        state.setdefault("admin_log", []).append(log_entry)
+                        
+                        state["ai_response"] = f"I notice you mentioned the name '{claimed_name.title()}', but you're currently logged in as {current_user_name}. If you'd like to switch accounts, please start a new chat session. Otherwise, how can I help you with your loan today?"
+                        return state
+            except Exception as e:
+                print(f"Name check error: {e}")
+                # Continue with normal flow if extraction fails
+        
+        # Check if user confirmed a pending match
+        if state.get("user_profile", {}).get("confirmed_match") and state.get("user_profile", {}).get("pending_match"):
+            customer_data = state["user_profile"]["pending_match"]
+            match_type = "CONFIRMED_NAME_MATCH"
+            state["user_profile"]["phone"] = customer_data.get("phone")
+            # Clear the pending state
+            del state["user_profile"]["pending_match"]
+            del state["user_profile"]["confirmed_match"]
+            
+            # Skip extraction, go directly to verification success flow
+            state["user_profile"]["name"] = customer_data.get("name")
+            log_entry["message"] = f"✓ User confirmed identity: {customer_data.get('name')}"
+            log_entry["type"] = "success"
+            
+            # Skip to customer_data processing (jump to the if customer_data block)
+            # We'll set the flag and let it fall through
+        
+        if not customer_data:
+            # Need to extract entities and verify - normal flow
+            extraction_prompt = """Extract the following information from the user's message. 
+Return ONLY a JSON object with these fields (use null if not found):
+{
+    "name": "Full name of the person",
+    "phone": "10-digit phone number (remove spaces, +91, etc.)",
+    "pan": "PAN card number (10 characters)"
+}
+
+Examples:
+- "I am Priya and my number is 9876543210" -> {"name": "Priya", "phone": "9876543210", "pan": null}
+- "My name is Amit Patel, phone 91234 56789" -> {"name": "Amit Patel", "phone": "9123456789", "pan": null}
+- "Rajesh Kumar here, PAN is ABCDE1234F" -> {"name": "Rajesh Kumar", "phone": null, "pan": "ABCDE1234F"}"""
+
+            try:
+                extraction_response = await self.llm.generate(
+                    extraction_prompt, 
+                    user_message,
+                    []
+                )
+                
+                # Parse JSON from response
+                json_match = extraction_response
+                if "```" in json_match:
+                    json_match = json_match.split("```")[1].replace("json", "").strip()
+                
+                extracted = json.loads(json_match)
+                
+                # Update user profile
+                if not state.get("user_profile"):
+                    state["user_profile"] = {}
+                
+                if extracted.get("name"):
+                    state["user_profile"]["name"] = extracted["name"]
+                if extracted.get("phone"):
+                    state["user_profile"]["phone"] = extracted["phone"]
+                if extracted.get("pan"):
+                    state["user_profile"]["pan"] = extracted["pan"]
+                
+                log_entry["extracted"] = extracted
+                log_entry["message"] = f"✓ Extracted: {extracted}"
+                log_entry["type"] = "success"
+                
+                # Try to verify against database
+                phone = state["user_profile"].get("phone")
+                name = state["user_profile"].get("name")
+                
+                # Strategy 1: Exact phone match (preferred - most secure)
+                if phone:
+                    customer_data = self.data_provider.get_customer_by_phone(phone)
+                    if customer_data:
+                        match_type = "PHONE_MATCH"
+                
+                # Strategy 2: Fuzzy name match (fallback - only if unique match)
+                if not customer_data and name:
+                    fuzzy_result = self.data_provider.fuzzy_match_by_name(name)
+                    
+                    if fuzzy_result.get("unique") and fuzzy_result.get("customer"):
+                        # Found a match - but ask for confirmation first
+                        matched_customer = fuzzy_result["customer"]
+                        matched_name = matched_customer.get("name")
+                        matched_phone_last4 = matched_customer.get("phone", "")[-4:]
+                        
+                        state["user_profile"]["pending_match"] = matched_customer
+                        state["user_profile"]["verified"] = False
+                        
+                        log_entry["verification_status"] = "PENDING_CONFIRMATION"
+                        log_entry["message"] = f"Found potential match: {matched_name} - awaiting confirmation"
+                        log_entry["type"] = "info"
+                        
+                        state["ai_response"] = f"I found a profile: {matched_name}, Phone: XXXX{matched_phone_last4}. Is this you? Please confirm or share your 10-digit phone number for verification."
+                        
+                        state.setdefault("admin_log", []).append(log_entry)
+                        return state
+                    
+                    elif fuzzy_result.get("matches") and len(fuzzy_result["matches"]) > 1:
+                        # Multiple people with similar names - ask for phone
+                        names_found = fuzzy_result.get("names_found", [])
+                        state["user_profile"]["verified"] = False
+                        log_entry["verification_status"] = "MULTIPLE_MATCHES"
+                        log_entry["message"] = f"Multiple customers found with similar name: {names_found}"
+                        log_entry["type"] = "warning"
+                        
+                        state["ai_response"] = f"Hi {name}! I found multiple customers with similar names. For security, could you please share your **10-digit phone number** so I can pull up the right account?"
+                        
+                        state.setdefault("admin_log", []).append(log_entry)
+                        return state
+                
+            except Exception as e:
+                print(f"❌ Verification extraction error: {e}")
+                log_entry["error"] = str(e)
+                log_entry["type"] = "warning"
+                
+                state["ai_response"] = "I'd love to help you! Could you please share your name and 10-digit phone number? For example: 'I am Priya and my number is 9876543210'"
+                state.setdefault("admin_log", []).append(log_entry)
+                return state
+                
+        # Process verified customer data (works for both phone match and confirmed name match)
+        if customer_data:
+            state["user_profile"]["verified"] = True
+            state["user_profile"]["name"] = customer_data.get("name", state["user_profile"].get("name"))
+            
+            # Populate financial data
+            fin_data = customer_data.get("financial_data", {})
+            state["financial_data"] = {
+                "credit_score": fin_data.get("credit_score", 0),
+                "monthly_income": fin_data.get("monthly_income", 0),
+                "annual_income": fin_data.get("annual_income", 0),
+                "existing_debt": fin_data.get("total_monthly_debt", 0),
+                "debt_to_income_ratio": fin_data.get("debt_to_income_ratio", 0),
+                "employment_type": fin_data.get("employment_type", "Unknown"),
+                "company": fin_data.get("company", "Unknown"),
+                "bank_balance": fin_data.get("bank_balance", 0)
+            }
+            
+            # Calculate pre-approved limit
+            credit_score = fin_data.get("credit_score", 0)
+            monthly_income = fin_data.get("monthly_income", 0)
+            
+            if credit_score >= 750:
+                pre_approved = min(monthly_income * 60, 2000000)
+            elif credit_score >= 700:
+                pre_approved = min(monthly_income * 48, 1500000)
+            elif credit_score >= 650:
+                pre_approved = min(monthly_income * 36, 1000000)
+            else:
+                pre_approved = min(monthly_income * 24, 500000)
+            
+            state["financial_data"]["pre_approved_limit"] = pre_approved
+            
+            # Set floor rate based on credit score
+            if credit_score >= 750:
+                floor_rate = 10.25
+                initial_rate = 11.99
+            elif credit_score >= 700:
+                floor_rate = 11.5
+                initial_rate = 13.5
+            elif credit_score >= 650:
+                floor_rate = 12.25
+                initial_rate = 14.99
+            else:
+                floor_rate = 14.0
+                initial_rate = 17.99
+            
+            state["negotiation_state"] = {
+                "floor_rate": floor_rate,
+                "current_offered_rate": initial_rate,
+                "attempt_count": 0,
+                "max_attempts": 3
+            }
+            
+            # Get risk category
+            behavioral = customer_data.get("behavioral_flags", {})
+            state["trust_analysis"] = {
+                "trust_score": 70 if credit_score >= 700 else 50,
+                "risk_category": behavioral.get("risk_category", "MEDIUM"),
+                "fraud_flags": [],
+                "behavioral_score": 80 if behavioral.get("payment_delays", 0) == 0 else 60
+            }
+            
+            log_entry["verification_status"] = "VERIFIED"
+            log_entry["match_type"] = match_type
+            log_entry["credit_score"] = credit_score
+            log_entry["message"] = f"✓ Customer verified ({match_type}): {state['user_profile']['name']} (Credit: {credit_score})"
+            
+            # Mark as existing customer
+            state["user_profile"]["user_type"] = "EXISTING_CUSTOMER"
+            state["user_profile"]["is_new_lead"] = False
+            
+            # Generate verification response for EXISTING CUSTOMER
+            name = state["user_profile"]["name"]
+            state["ai_response"] = f"""Welcome back, {name}! 👋 Great to see you again!
+
+🎉 **You have a pre-approved offer waiting!**
+
+**Your Profile:**
+• Credit Score: **{credit_score}/900** {'(Excellent! 🌟)' if credit_score >= 750 else '(Good!)' if credit_score >= 700 else '(Fair)'}
+• **Pre-approved Limit:** ₹{pre_approved:,}
+• Interest Rate: Starting from {floor_rate}% p.a.
+• Employment: {fin_data.get('employment_type', 'Salaried')} at {fin_data.get('company', 'your company')}
+
+Would you like to proceed with your pre-approved offer? Just tell me how much you'd like to borrow!"""
+                    
+        else:
+            # NEW PROSPECT FLOW - Create lead instead of failing
+            name = state["user_profile"].get("name")
+            phone = state["user_profile"].get("phone")
+            
+            # Create a new lead in the database
+            if phone:
+                customer_data = self.data_provider.create_lead(phone, name)
+                state["user_profile"]["verified"] = True  # We created them, so they're verified
+                state["user_profile"]["user_type"] = "NEW_PROSPECT"
+                state["user_profile"]["is_new_lead"] = True
+                state["user_profile"]["name"] = name or "New Prospect"
+                
+                # Initialize empty financial data for new prospects
+                state["financial_data"] = {
+                    "credit_score": None,
+                    "monthly_income": None,
+                    "annual_income": None,
+                    "existing_debt": None,
+                    "debt_to_income_ratio": None,
+                    "employment_type": None,
+                    "company": None,
+                    "bank_balance": None,
+                    "pre_approved_limit": 0
+                }
+                
+                # Initialize negotiation state with default values
+                state["negotiation_state"] = {
+                    "floor_rate": 14.0,  # Default floor rate for unknown credit
+                    "current_offered_rate": 17.99,  # Default rate for unknown credit
+                    "attempt_count": 0,
+                    "max_attempts": 3
+                }
+                
+                state["trust_analysis"] = {
+                    "trust_score": 50,  # Neutral trust for new leads
+                    "risk_category": "UNKNOWN",
+                    "fraud_flags": [],
+                    "behavioral_score": 50
+                }
+                
+                log_entry["verification_status"] = "NEW_LEAD_CREATED"
+                log_entry["user_type"] = "NEW_PROSPECT"
+                log_entry["message"] = f"✓ Created new lead: {name or 'Unknown'} ({phone})"
+                log_entry["type"] = "info"
+                
+                # Generate new prospect welcome message
+                display_name = name if name and name.lower() not in ["none", "null", ""] else ""
+                if display_name:
+                    state["ai_response"] = f"""Hi {display_name}, thanks for choosing Tata Capital! 🎉
+
+I see you're new here - welcome aboard! 
+
+To check your loan eligibility, I'll need a few details:
+
+**First, what is your monthly salary?** 💰
+
+(This helps me calculate your loan limit and the best interest rate for you)"""
+                else:
+                    state["ai_response"] = f"""Hi there, thanks for choosing Tata Capital! 🎉
+
+I see you're new here - welcome aboard!
+
+To get started, could you please tell me:
+1. **Your name**
+2. **Your monthly salary** 💰
+
+This helps me calculate your loan eligibility!"""
+            else:
+                # No phone number provided yet
+                state["user_profile"]["verified"] = False
+                state["user_profile"]["user_type"] = "NEW_PROSPECT"
+                log_entry["verification_status"] = "NEEDS_PHONE"
+                log_entry["message"] = "New prospect - needs phone number for lead creation"
+                
+                display_name = name if name and name.lower() not in ["none", "null", ""] else ""
+                if display_name:
+                    state["ai_response"] = f"""Hi {display_name}! Welcome to Tata Capital! 🎉
+
+To get you started and check your loan eligibility, I'll need your **10-digit phone number**.
+
+This helps me create your profile and give you personalized loan offers!"""
+                else:
+                    state["ai_response"] = """Welcome to Tata Capital! 🎉
+
+I'd love to help you with a personal loan. To get started, please share:
+- Your **name**
+- Your **10-digit phone number**
+
+Example: "I am Rahul and my number is 9876543210\""""
+        
+        state.setdefault("admin_log", []).append(log_entry)
+        return state
+    
+    # ==================== UNDERWRITING AGENT (SPOKE) ====================
+    async def underwriting_agent_node(self, state: AgentState) -> AgentState:
+        """
+        UNDERWRITING AGENT
+        
+        Responsibilities:
+        1. Calculate loan eligibility
+        2. Determine interest rates based on credit profile
+        3. Calculate EMI
+        4. Make approval/rejection decisions
+        """
+        log_entry = {
+            "agent": "Underwriting Agent",
+            "timestamp": datetime.now().isoformat(),
+            "action": "loan_underwriting"
+        }
+        
+        # Check if user is verified - if not, redirect to verification
+        user_profile = state.get("user_profile", {})
+        if not user_profile.get("verified"):
+            log_entry["message"] = "User not verified - redirecting to verification first"
+            log_entry["type"] = "warning"
+            state.setdefault("admin_log", []).append(log_entry)
+            
+            # Save the loan request intent for later
+            state["loan_request"]["pending_message"] = state["current_message"]
+            
+            state["ai_response"] = "I'd love to help you with that loan! But first, I need to verify your identity. Could you please share your name and 10-digit phone number?"
+            return state
+        
+        user_message = state["current_message"].lower()
+        financial = state.get("financial_data", {})
+        user_profile = state.get("user_profile", {})
+        negotiation = state.get("negotiation_state", {})
+        is_new_lead = user_profile.get("is_new_lead", False)
+        
+        # NEW PROSPECT FLOW: Collect missing financial information first
+        if is_new_lead:
+            monthly_income = financial.get("monthly_income")
+            credit_score = financial.get("credit_score")
+            
+            # Try to extract salary/income from the message
+            income_prompt = """Extract salary/income information from this message. Return ONLY a JSON object:
+{"monthly_income": <number in rupees or null>, "employment_type": "<Salaried/Self-Employed/Business or null>"}
+
+Examples:
+- "my salary is 75000" -> {"monthly_income": 75000, "employment_type": "Salaried"}
+- "I earn 1.2 lakh per month" -> {"monthly_income": 120000, "employment_type": "Salaried"}
+- "I'm self employed making around 80k" -> {"monthly_income": 80000, "employment_type": "Self-Employed"}
+- "50k monthly" -> {"monthly_income": 50000, "employment_type": null}
+- "I need a loan" -> {"monthly_income": null, "employment_type": null}
+- "my annual income is 12 lakhs" -> {"monthly_income": 100000, "employment_type": "Salaried"}"""
+
+            try:
+                income_response = await self.llm.generate(income_prompt, user_message, [])
+                
+                if "```" in income_response:
+                    income_response = income_response.split("```")[1].replace("json", "").strip()
+                
+                income_info = json.loads(income_response)
+                
+                if income_info.get("monthly_income"):
+                    # Update financial data
+                    state["financial_data"]["monthly_income"] = income_info["monthly_income"]
+                    state["financial_data"]["annual_income"] = income_info["monthly_income"] * 12
+                    
+                    if income_info.get("employment_type"):
+                        state["financial_data"]["employment_type"] = income_info["employment_type"]
+                    
+                    # Update the lead in the database
+                    phone = user_profile.get("phone")
+                    if phone:
+                        self.data_provider.update_lead(phone, {
+                            "monthly_income": income_info["monthly_income"],
+                            "employment_type": income_info.get("employment_type")
+                        })
+                    
+                    # Assume a default credit score for new prospects (will be updated after PAN verification)
+                    # For now, use a conservative estimate
+                    estimated_credit_score = 700  # Neutral assumption
+                    state["financial_data"]["credit_score"] = estimated_credit_score
+                    
+                    # Calculate pre-approved limit based on income (conservative for new leads)
+                    monthly_income = income_info["monthly_income"]
+                    pre_approved = min(monthly_income * 36, 1000000)  # More conservative for new leads
+                    state["financial_data"]["pre_approved_limit"] = pre_approved
+                    
+                    # Update negotiation rates for new prospect
+                    state["negotiation_state"] = {
+                        "floor_rate": 12.5,
+                        "current_offered_rate": 15.99,
+                        "attempt_count": 0,
+                        "max_attempts": 3
+                    }
+                    
+                    log_entry["income_collected"] = income_info
+                    log_entry["message"] = f"✓ Collected income for new prospect: ₹{monthly_income:,}/month"
+                    log_entry["type"] = "success"
+                    
+                    customer_name = user_profile.get("name", "there")
+                    state["ai_response"] = f"""Thanks {customer_name}! I've noted your monthly income as **₹{monthly_income:,}**.
+
+Based on your income, here's what I can offer:
+
+📊 **Your Eligibility:**
+- **Pre-approved Limit:** Up to ₹{pre_approved:,}
+- **Interest Rate:** Starting from {state["negotiation_state"]["current_offered_rate"]}% p.a.
+
+💡 For an even better rate and higher limit, you can share your **PAN card number** so I can check your credit score.
+
+Or, just tell me **how much you'd like to borrow** and I'll calculate your EMI! 💰"""
+                    
+                    state.setdefault("admin_log", []).append(log_entry)
+                    return state
+                    
+            except Exception as e:
+                print(f"Income extraction error: {e}")
+            
+            # If we still don't have income, ask for it
+            if not monthly_income:
+                customer_name = user_profile.get("name", "there")
+                state["ai_response"] = f"""Hi {customer_name}! To check your loan eligibility, I need to know your monthly income.
+
+**What is your monthly salary/income?** 💰
+
+For example: "My salary is 75,000 per month" or "I earn 1.2 lakhs monthly"
+
+This helps me calculate the best loan offer for you!"""
+                
+                log_entry["message"] = "New prospect - waiting for income information"
+                log_entry["type"] = "info"
+                state.setdefault("admin_log", []).append(log_entry)
+                return state
+        
+        # EXISTING CUSTOMER OR NEW LEAD WITH DATA - Standard underwriting flow
+        # Extract loan amount from message
+        amount_prompt = """Extract the loan amount from this message. Return ONLY a JSON object:
+{"amount": <number in rupees>, "purpose": "<purpose if mentioned>", "tenure": <months if mentioned>}
+
+Examples:
+- "I need 5 lakhs" -> {"amount": 500000, "purpose": null, "tenure": null}
+- "want to borrow 3 lakh for home renovation" -> {"amount": 300000, "purpose": "home renovation", "tenure": null}
+- "8 lakhs for 36 months" -> {"amount": 800000, "purpose": null, "tenure": 36}
+- "need loan for wedding" -> {"amount": null, "purpose": "wedding", "tenure": null}"""
+
+        try:
+            amount_response = await self.llm.generate(amount_prompt, user_message, [])
+            
+            if "```" in amount_response:
+                amount_response = amount_response.split("```")[1].replace("json", "").strip()
+            
+            loan_info = json.loads(amount_response)
+            
+            # Update loan request
+            if not state.get("loan_request"):
+                state["loan_request"] = {}
+            
+            if loan_info.get("amount"):
+                state["loan_request"]["amount"] = loan_info["amount"]
+            if loan_info.get("purpose"):
+                state["loan_request"]["purpose"] = loan_info["purpose"]
+            if loan_info.get("tenure"):
+                state["loan_request"]["tenure"] = loan_info["tenure"]
+            else:
+                state["loan_request"]["tenure"] = 36  # Default tenure
+            
+            log_entry["extracted_loan"] = loan_info
+            
+        except Exception as e:
+            print(f"Amount extraction error: {e}")
+            loan_info = {}
+        
+        # Get values for STRICT RULE ENGINE CALCULATION (NO LLM GUESSING)
+        requested_amount = state.get("loan_request", {}).get("amount", 0)
+        pre_approved = financial.get("pre_approved_limit", 500000)
+        credit_score = financial.get("credit_score", 650)
+        existing_debt = financial.get("existing_debt", 0)
+        tenure = state.get("loan_request", {}).get("tenure", 36)
+        
+        # ========== STRICT VERIFICATION: Use PROVEN salary from documents ==========
+        document_state = state.get("document_state", {})
+        proven_salary = document_state.get("proven_salary")
+        salary_source = financial.get("salary_source", "CLAIMED")
+        
+        # ALWAYS prefer proven_salary from documents over claimed salary
+        if proven_salary:
+            monthly_income = proven_salary
+            salary_source = "DOCUMENT_VERIFIED"
+            log_entry["salary_source"] = "PROVEN (from document)"
+        else:
+            monthly_income = financial.get("monthly_income", 50000)
+            log_entry["salary_source"] = "CLAIMED (no document yet)"
+        
+        # Check for discrepancies that affect underwriting
+        discrepancy_flags = document_state.get("discrepancy_flags", [])
+        
+        # If there's a name mismatch, we cannot proceed
+        if "NAME_MISMATCH" in discrepancy_flags:
+            decision = "REJECT"
+            reason = "Document identity mismatch - cannot verify applicant"
+            state["loan_request"]["underwriting_decision"] = decision
+            state["loan_request"]["underwriting_reason"] = reason
+            state["ai_response"] = f"""I'm sorry, but I cannot proceed with your loan application.
+
+**Reason:** The name on your uploaded document doesn't match your registered profile.
+
+Please ensure you upload documents that match your registered identity, or contact customer support for assistance."""
             state.setdefault("admin_log", []).append(log_entry)
             return state
         
-        # =========================================================
-        # MODE 2: PRODUCTION MODE (Real Gemini AI)
-        # =========================================================
-        print("🤖 PRODUCTION MODE ACTIVE - Using Gemini AI")
+        # PHASE 3: STRICT BUSINESS RULES - NO LLM DECISIONS
+        decision = None
+        reason = None
         
-        try:
-            # Extract entities using Gemini
-            entities = await self.gemini.extract_entities(
-                state["current_message"],
-                state["messages"]
-            )
-            
-            # Update state with extracted information
-            if entities.name:
-                state["name"] = entities.name
-            if entities.phone:
-                state["phone"] = entities.phone
-            if entities.pan:
-                state["pan"] = entities.pan
-            if entities.intent:
-                state["intent"] = entities.intent
-            if entities.loan_type:
-                state["loan_type"] = entities.loan_type
-            if entities.loan_amount:
-                state["loan_amount_requested"] = entities.loan_amount
-            
-            # Determine what's missing
-            missing = []
-            if not state.get("name"):
-                missing.append("name")
-            if not state.get("phone"):
-                missing.append("phone")
-            if not state.get("pan"):
-                missing.append("pan")
-            
-            state["missing_info"] = missing
-            
-            log_entry["mode"] = "production_ai"
-            log_entry["extracted"] = {
-                "name": entities.name,
-                "phone": entities.phone,
-                "pan": entities.pan,
-                "intent": entities.intent
-            }
-            log_entry["missing_info"] = missing
-            
-        except Exception as e:
-            log_entry["error"] = str(e)
-            log_entry["mode"] = "production_ai_error"
-            # Default to asking for information
-            state["missing_info"] = ["name", "phone", "pan"]
+        # Add salary verification note to reason
+        salary_note = f" (Verified from document)" if salary_source == "DOCUMENT_VERIFIED" else " (Claimed - pending verification)"
         
-        state.setdefault("admin_log", []).append(log_entry)
-        return state
-    
-    # ========== NODE B: GATEKEEPER (Verification) ==========
-    async def gatekeeper_node(self, state: AgentState) -> AgentState:
-        """Verify customer identity against mock database"""
-        log_entry = {
-            "node": "gatekeeper",
-            "timestamp": datetime.now().isoformat(),
-            "action": "customer_verification"
+        # Rule 1: Credit Score Check
+        if credit_score < 700:
+            decision = "REJECT"
+            reason = f"Credit score {credit_score} is below minimum requirement of 700"
+            
+        # Rule 2: Instant Approval 
+        elif requested_amount <= pre_approved:
+            decision = "APPROVE_INSTANT"
+            reason = f"Loan amount ₹{requested_amount:,} is within pre-approved limit ₹{pre_approved:,}{salary_note}"
+            
+        # Rule 3: Conditional Approval
+        elif requested_amount <= (2 * pre_approved):
+            # Calculate EMI at 12% for 3 years (36 months)
+            monthly_rate = 12.0 / 12 / 100  # 12% annual = 1% monthly
+            emi = requested_amount * monthly_rate * ((1 + monthly_rate) ** 36) / (((1 + monthly_rate) ** 36) - 1)
+            emi = round(emi)
+            
+            # Check EMI affordability using PROVEN/VERIFIED income
+            if emi <= (0.5 * monthly_income):
+                decision = "APPROVE_WITH_DOCS"
+                reason = f"EMI ₹{emi:,} is {(emi/monthly_income*100):.1f}% of verified income{salary_note}"
+            else:
+                decision = "REJECT"
+                reason = f"EMI ₹{emi:,} is {(emi/monthly_income*100):.1f}% of income (>50% limit)"
+                
+        # Rule 4: Hard Limit
+        else:  # requested_amount > (2 * pre_approved)
+            decision = "REJECT"
+            reason = f"Loan amount ₹{requested_amount:,} exceeds 2x pre-approved limit ₹{(2*pre_approved):,}"
+        
+        # Store the EXACT decision in state
+        state["loan_request"]["underwriting_decision"] = decision
+        state["loan_request"]["underwriting_reason"] = reason
+        state["loan_request"]["credit_score"] = credit_score
+        state["loan_request"]["pre_approved"] = pre_approved
+        state["loan_request"]["requested_amount"] = requested_amount
+        
+        # Calculate current rate and EMI for display
+        current_rate = negotiation.get("current_offered_rate", 12.0)
+        monthly_rate = current_rate / 12 / 100
+        if monthly_rate > 0 and decision in ["APPROVE_INSTANT", "APPROVE_WITH_DOCS"]:
+            emi = requested_amount * monthly_rate * ((1 + monthly_rate) ** tenure) / (((1 + monthly_rate) ** tenure) - 1)
+        else:
+            emi = 0
+        emi = round(emi)
+        
+        # Update states
+        state["negotiation_state"]["emi_amount"] = emi
+        state["negotiation_state"]["approved_amount"] = requested_amount if decision != "REJECT" else 0
+        state["loan_request"]["amount"] = requested_amount
+        state["loan_request"]["emi"] = emi
+        
+        log_entry["calculation"] = {
+            "requested": requested_amount,
+            "pre_approved": pre_approved,
+            "credit_score": credit_score,
+            "decision": decision,
+            "reason": reason,
+            "emi": emi,
+            "rate": current_rate
         }
+        log_entry["message"] = f"RULE ENGINE: {decision} - {reason}"
+        log_entry["type"] = "success" if decision != "REJECT" else "error"
         
-        try:
-            verification_result = self.data_provider.verify_customer(
-                state["phone"], 
-                state["pan"]
-            )
+        # PHASE 3: Generate response directly from underwriting (don't route to Sales)
+        name = user_profile.get("name", "valued customer")
+        purpose = state.get("loan_request", {}).get("purpose", "")
+        tenure = state.get("loan_request", {}).get("tenure", 36)
+        
+        if decision == "REJECT":
+            state["ai_response"] = f"""I understand your interest in a personal loan, {name}.
+
+Unfortunately, after running our assessment, I'm unable to approve your application at this time.
+
+**Reason:** {reason}
+
+**Tips to improve your eligibility:**
+- Work on improving your credit score through timely payments
+- Pay down existing debts to improve your debt-to-income ratio
+- Consider applying for a smaller loan amount
+- Wait 3-6 months and apply again
+
+Would you like tips on credit improvement?"""
             
-            state["verification_status"] = verification_result["status"]
-            state["customer_verified"] = verification_result["verified"]
+        elif decision == "APPROVE_INSTANT":
+            state["ai_response"] = f"""Fantastic news, {name}!
+
+**Your loan is INSTANTLY APPROVED!**
+
+**Loan Details:**
+- Amount: Rs {requested_amount:,}{' for ' + purpose if purpose else ''}
+- Interest Rate: {current_rate}% per annum
+- Monthly EMI: Rs {emi:,}
+- Tenure: {tenure} months
+
+**Reason:** {reason}
+
+Would you like to proceed with this offer, or would you like me to see if I can get you a **better rate**?"""
             
-            if verification_result["verified"]:
-                state["customer_profile"] = verification_result["profile"]
-                log_entry["status"] = "verified"
-                log_entry["customer"] = state["name"]
-            elif verification_result["status"] == "NOT_FOUND":
-                # Create lead
-                lead = self.data_provider.create_lead(
-                    state["name"], 
-                    state["phone"], 
-                    state.get("pan")
-                )
-                state["customer_profile"] = lead
-                log_entry["status"] = "new_lead"
-            elif verification_result["status"] == "MISMATCH":
-                state["fraud_flags"] = state.get("fraud_flags", [])
-                state["fraud_flags"].append("IDENTITY_MISMATCH")
-                log_entry["status"] = "mismatch_risk"
-            
-            log_entry["verification_result"] = verification_result["status"]
-            
-        except Exception as e:
-            log_entry["error"] = str(e)
+        elif decision == "APPROVE_WITH_DOCS":
+            state["ai_response"] = f"""Great news, {name}!
+
+**Your loan is CONDITIONALLY APPROVED!**
+
+**Loan Details:**
+- Amount: Rs {requested_amount:,}{' for ' + purpose if purpose else ''}
+- Interest Rate: {current_rate}% per annum
+- Monthly EMI: Rs {emi:,}
+- Tenure: {tenure} months
+
+**Condition:** Please upload your salary slip for income verification.
+
+**Reason:** {reason}
+
+Would you like to proceed, or shall I try to get you a better rate first?"""
         
         state.setdefault("admin_log", []).append(log_entry)
         return state
     
-    # ========== NODE C: ANALYST (Trust & Safety) ==========
-    async def analyst_node(self, state: AgentState) -> AgentState:
-        """Analyze message for fraud, desperation, aggression"""
+    # ==================== TRUST AGENT (SPOKE) ====================
+    async def trust_agent_node(self, state: AgentState) -> AgentState:
+        """
+        TRUST & SAFETY AGENT
+        
+        Responsibilities:
+        1. Analyze behavioral patterns
+        2. Detect fraud indicators
+        3. Calculate trust score
+        4. Flag suspicious activities
+        """
         log_entry = {
-            "node": "analyst",
+            "agent": "Trust & Safety Agent",
             "timestamp": datetime.now().isoformat(),
             "action": "trust_analysis"
         }
         
+        user_message = state["current_message"]
+        user_profile = state.get("user_profile", {})
+        financial = state.get("financial_data", {})
+        
+        # Trust analysis prompt
+        trust_prompt = """Analyze this loan application interaction for potential fraud or risk indicators.
+
+Return a JSON object:
+{
+    "trust_score": <0-100>,
+    "risk_level": "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
+    "red_flags": ["list of concerns if any"],
+    "reasoning": "brief explanation"
+}
+
+Look for:
+- Urgency or desperation signals
+- Inconsistent information
+- Pressure tactics from customer
+- Unusual requests
+- Signs of identity fraud
+
+Be balanced - most customers are genuine."""
+
+        context = f"""
+Message: "{user_message}"
+User Profile: {json.dumps(user_profile)}
+Financial Data: {json.dumps(financial)}
+"""
+
         try:
-            # Perform trust analysis
-            trust_analysis = await self.gemini.analyze_trust(state["current_message"])
+            analysis_response = await self.llm.generate(trust_prompt, context, [])
             
-            state["trust_score"] = trust_analysis.trust_score
-            state["trust_reasoning"] = trust_analysis.reasoning
+            if "```" in analysis_response:
+                analysis_response = analysis_response.split("```")[1].replace("json", "").strip()
             
-            # Update fraud flags
-            if trust_analysis.red_flags:
-                state["fraud_flags"] = state.get("fraud_flags", [])
-                state["fraud_flags"].extend(trust_analysis.red_flags)
+            analysis = json.loads(analysis_response)
             
-            log_entry["trust_score"] = trust_analysis.trust_score
-            log_entry["risk_score"] = trust_analysis.risk_score
-            log_entry["red_flags"] = trust_analysis.red_flags
-            log_entry["urgency"] = trust_analysis.urgency_level
-            
-        except Exception as e:
-            log_entry["error"] = str(e)
-            # Default to neutral trust score on error
-            state["trust_score"] = 50
-            state["trust_reasoning"] = "Unable to analyze - defaulting to neutral"
-        
-        state.setdefault("admin_log", []).append(log_entry)
-        return state
-    
-    # ========== NODE D: UNDERWRITER (Decision Engine) ==========
-    async def underwriter_node(self, state: AgentState) -> AgentState:
-        """Apply strict business rules for loan decision"""
-        log_entry = {
-            "node": "underwriter",
-            "timestamp": datetime.now().isoformat(),
-            "action": "loan_decision"
-        }
-        
-        try:
-            profile = state.get("customer_profile")
-            trust_score = state.get("trust_score", 50)
-            fraud_flags = state.get("fraud_flags", [])
-            
-            # NEW LEAD - Require Documentation
-            if not state["customer_verified"]:
-                state["loan_decision"] = "YELLOW_FLAG"
-                state["interest_rate"] = 18.5
-                state["loan_amount_eligible"] = 100000
-                state["conditions"] = [
-                    "Salary Slip (last 3 months)",
-                    "Bank Statement (last 6 months)",
-                    "PAN Card",
-                    "Aadhaar Card"
-                ]
-                log_entry["decision"] = "new_customer_requires_docs"
-                state.setdefault("admin_log", []).append(log_entry)
-                return state
-            
-            # FRAUD FLAGS - Auto Decline
-            if fraud_flags or trust_score < 30:
-                state["loan_decision"] = "DECLINED"
-                state["interest_rate"] = None
-                state["loan_amount_eligible"] = 0
-                state["conditions"] = []
-                state["decline_reason"] = "Failed security verification"
-                log_entry["decision"] = "declined_fraud"
-                state.setdefault("admin_log", []).append(log_entry)
-                return state
-            
-            # EXISTING CUSTOMER - Apply Underwriting Rules
-            financial = profile.get("financial_data", {})
-            behavioral = profile.get("behavioral_flags", {})
-            
-            credit_score = financial.get("credit_score", 0)
-            debt_ratio = financial.get("debt_to_income_ratio", 0)
-            risk_category = behavioral.get("risk_category", "UNKNOWN")
-            
-            # RULE 1: SUPER PRIME - Best Rates
-            if credit_score >= 750 and trust_score >= 80 and debt_ratio < 0.3:
-                state["loan_decision"] = "APPROVED"
-                state["interest_rate"] = 10.5
-                state["loan_amount_eligible"] = min(
-                    financial.get("monthly_income", 0) * 60,  # 5 years of income
-                    2000000
-                )
-                state["conditions"] = ["Salary slip for final verification"]
-                log_entry["decision"] = "approved_prime"
-            
-            # RULE 2: PRIME - Good Rates
-            elif credit_score >= 700 and trust_score >= 70 and debt_ratio < 0.4:
-                state["loan_decision"] = "APPROVED"
-                state["interest_rate"] = 12.5
-                state["loan_amount_eligible"] = min(
-                    financial.get("monthly_income", 0) * 48,
-                    1500000
-                )
-                state["conditions"] = ["Salary slip", "Latest credit report"]
-                log_entry["decision"] = "approved_standard"
-            
-            # RULE 3: MEDIUM RISK - Higher Rates + Documentation
-            elif credit_score >= 600 and trust_score >= 50 and debt_ratio < 0.5:
-                state["loan_decision"] = "YELLOW_FLAG"
-                state["interest_rate"] = 18.5
-                state["loan_amount_eligible"] = min(
-                    financial.get("monthly_income", 0) * 36,
-                    800000
-                )
-                state["conditions"] = [
-                    "Salary slip (last 6 months)",
-                    "Bank statement (last 12 months)",
-                    "ITR (last 2 years)",
-                    "Collateral or guarantor may be required"
-                ]
-                log_entry["decision"] = "conditional_approval"
-            
-            # RULE 4: DECLINE
-            else:
-                state["loan_decision"] = "DECLINED"
-                state["interest_rate"] = None
-                state["loan_amount_eligible"] = 0
-                state["conditions"] = []
-                
-                # Determine decline reason
-                if credit_score < 600:
-                    state["decline_reason"] = "Credit score below minimum threshold (600)"
-                elif debt_ratio >= 0.5:
-                    state["decline_reason"] = "Debt-to-income ratio too high (>50%)"
-                elif trust_score < 50:
-                    state["decline_reason"] = "Unable to verify application authenticity"
-                else:
-                    state["decline_reason"] = "Does not meet current eligibility criteria"
-                
-                log_entry["decision"] = "declined_criteria"
-            
-            log_entry["credit_score"] = credit_score
-            log_entry["trust_score"] = trust_score
-            log_entry["final_decision"] = state["loan_decision"]
-            
-        except Exception as e:
-            log_entry["error"] = str(e)
-            # Default to decline on error
-            state["loan_decision"] = "DECLINED"
-            state["decline_reason"] = "System error - please retry"
-        
-        state.setdefault("admin_log", []).append(log_entry)
-        return state
-    
-    # ========== NODE E: VOICE (Sales Agent) ==========
-    async def voice_node(self, state: AgentState) -> AgentState:
-        """Generate natural, empathetic response"""
-        # Add realistic delay to make responses feel natural
-        add_realistic_delay()
-        
-        log_entry = {
-            "node": "voice",
-            "timestamp": datetime.now().isoformat(),
-            "action": "response_generation"
-        }
-        
-        try:
-            # ⚡ SUPER FAST PATH: Use scripted response if already set
-            if state.get("ai_response"):
-                log_entry["fast_path"] = "scripted_response_already_set"
-                state.setdefault("admin_log", []).append(log_entry)
-                return state
-            
-            # ⚡ FAST PATH: Pre-written responses for decisions (save API quota)
-            decision = state.get("loan_decision")
-            name = state.get("name", "there")
-            
-            if decision == "APPROVED":
-                amount = state.get("loan_amount_eligible", 0)
-                rate = state.get("interest_rate", 0)
-                state["ai_response"] = f"🎉 Congratulations {name}! Your loan application has been APPROVED! You're eligible for Rs {amount:,} at an interest rate of {rate}% per annum. I've generated your sanction letter. Would you like to proceed with the disbursement?"
-                log_entry["fast_path"] = "approved_template"
-                state.setdefault("admin_log", []).append(log_entry)
-                return state
-            
-            elif decision == "YELLOW_FLAG":
-                amount = state.get("loan_amount_eligible", 0)
-                rate = state.get("interest_rate", 0)
-                conditions = state.get("conditions", [])
-                cond_text = "\n• ".join(conditions) if conditions else "additional documentation"
-                state["ai_response"] = f"Hello {name}! We can offer you Rs {amount:,} at {rate}% per annum, but we need to verify a few things first. Please upload the following:\n• {cond_text}\n\nOnce verified, we can proceed with instant approval!"
-                log_entry["fast_path"] = "conditional_template"
-                state.setdefault("admin_log", []).append(log_entry)
-                return state
-            
-            elif decision == "DECLINED":
-                reason = state.get("decline_reason", "internal risk policies")
-                state["ai_response"] = f"I apologize {name}, but we are unable to process your application at this time due to {reason}. I recommend checking your credit report and considering re-applying in 6-12 months after improving your credit profile."
-                log_entry["fast_path"] = "declined_template"
-                state.setdefault("admin_log", []).append(log_entry)
-                return state
-            
-            # ⚡ FAST PATH: Missing info request
-            if state.get("missing_info"):
-                missing = state["missing_info"]
-                if "phone" in missing and "name" in missing:
-                    state["ai_response"] = "Welcome to Tata Capital! I can help you check your loan eligibility instantly. To begin, please tell me your full name and mobile number."
-                elif "pan" in missing:
-                    state["ai_response"] = f"Thank you {name}! To proceed with your loan application, I'll need your PAN card number for verification."
-                else:
-                    state["ai_response"] = f"Thank you for your interest! I need a bit more information to check your eligibility. Could you please provide: {', '.join(missing)}?"
-                log_entry["fast_path"] = "missing_info_template"
-                state.setdefault("admin_log", []).append(log_entry)
-                return state
-            
-            # 🐢 SLOW PATH: Use Gemini for complex/general queries
-            conversation_history = []
-            for msg in state.get("messages", [])[-3:]:
-                if isinstance(msg, dict):
-                    if msg.get("role") == "user":
-                        conversation_history.append(HumanMessage(content=msg["content"]))
-                    elif msg.get("role") == "assistant":
-                        conversation_history.append(AIMessage(content=msg["content"]))
-            
-            decision_info = {
-                "loan_decision": decision,
-                "interest_rate": state.get("interest_rate"),
-                "loan_amount_eligible": state.get("loan_amount_eligible"),
-                "conditions": state.get("conditions", []),
-                "decline_reason": state.get("decline_reason")
+            # Update trust analysis
+            state["trust_analysis"] = {
+                "trust_score": analysis.get("trust_score", 70),
+                "risk_category": analysis.get("risk_level", "MEDIUM"),
+                "fraud_flags": analysis.get("red_flags", []),
+                "behavioral_score": analysis.get("trust_score", 70),
+                "reasoning": analysis.get("reasoning", "")
             }
             
-            # Generate response
-            response = await self.gemini.generate_response(
-                decision=decision_info,
-                customer_name=name,
-                conversation_context=conversation_history,
-                stage=state.get("conversation_stage", "unknown")
-            )
+            log_entry["trust_score"] = analysis.get("trust_score")
+            log_entry["risk_level"] = analysis.get("risk_level")
+            log_entry["message"] = f"✓ Trust Score: {analysis.get('trust_score')}, Risk: {analysis.get('risk_level')}"
+            log_entry["type"] = "success" if analysis.get("risk_level") in ["LOW", "MEDIUM"] else "warning"
             
-            state["ai_response"] = response
-            log_entry["response_length"] = len(response)
-            
-        except Exception as e:
-            log_entry["error"] = str(e)
-            # Check if quota error
-            if "429" in str(e) or "quota" in str(e).lower():
-                state["ai_response"] = "I apologize, but our AI system is currently at capacity. However, I can still help you! Please call our customer service at 1800-209-8800 for immediate assistance."
+            # Generate appropriate response based on risk
+            if analysis.get("risk_level") == "CRITICAL":
+                state["ai_response"] = "I appreciate your interest, but I'm noticing some concerns with this application. For security purposes, I'll need to verify some additional information. Could you please provide your PAN card number for verification?"
             else:
-                state["ai_response"] = "I apologize, but I'm experiencing technical difficulties. Please try again in a moment."
+                state["ai_response"] = ""  # Let other agents respond
+                
+        except Exception as e:
+            print(f"Trust analysis error: {e}")
+            log_entry["error"] = str(e)
+            log_entry["type"] = "warning"
+            state["trust_analysis"] = {"trust_score": 50, "risk_category": "MEDIUM"}
         
         state.setdefault("admin_log", []).append(log_entry)
         return state
     
-    # ========== ROUTING LOGIC ==========
-    def route_after_listener(self, state: AgentState) -> str:
+    # ==================== CONSISTENCY VERIFICATION ====================
+    def verify_consistency(self, state: AgentState) -> Dict[str, Any]:
         """
-        Decide next node after entity extraction
+        VERIFY CONSISTENCY - Cross-check claimed vs proven data
         
-        ROUTING LOGIC:
-        - Demo Mode: Always go to voice (response already set in listener)
-        - Production Mode: Route based on extracted information
+        Rules:
+        1. Salary: If proven_salary < 90% of claimed_salary → Discrepancy
+        2. Name: If fuzzy match < 80% → Reject document
+        
+        Returns:
+            Dict with verification results and any discrepancies
         """
-        # DEMO MODE: Go to voice to set response
-        if DEMO_MODE or state.get("is_scripted"):
-            print("🎬 DEMO ROUTE: Listener → Voice")
-            return "voice"
-        
-        # PRODUCTION MODE: Standard agent flow
-        if state.get("missing_info"):
-            print("🤖 PRODUCTION ROUTE: Listener → Voice (ask for info)")
-            return "voice"  # Ask for missing information
-        else:
-            print("🤖 PRODUCTION ROUTE: Listener → Gatekeeper (verify)")
-            return "gatekeeper"  # Proceed with verification
-    
-    # ========== MAIN EXECUTION ==========
-    async def process_message(self, user_message: str, conversation_history: List = None, previous_state: Dict = None) -> Dict[str, Any]:
-        """
-        Process a user message through the LangGraph state machine
-        
-        DUAL MODE OPERATION:
-        - DEMO_MODE = True  → Scripted flows, instant responses
-        - DEMO_MODE = False → Full Gemini AI processing
-        
-        Current Mode: {'DEMO (Scripted)' if DEMO_MODE else 'PRODUCTION (Gemini AI)'}
-        """
-        print(f"\n{'='*60}")
-        print(f"🚀 SYSTEM MODE: {'🎬 DEMO MODE' if DEMO_MODE else '🤖 PRODUCTION MODE'}")
-        print(f"{'='*60}\n")
-        
-        # Initialize state with previous state preservation
-        initial_state = {
-            "messages": conversation_history or [],
-            "current_message": user_message,
-            "name": None,
-            "phone": None,
-            "pan": None,
-            "intent": None,
-            "customer_verified": False,
-            "customer_profile": None,
-            "verification_status": None,
-            "trust_score": 50,
-            "trust_reasoning": "",
-            "fraud_flags": [],
-            "loan_decision": None,
-            "interest_rate": None,
-            "loan_amount_eligible": None,
-            "conditions": [],
-            "ai_response": "",
-            "conversation_stage": "initial",
-            "missing_info": [],
-            "admin_log": [],
-            # Preserve demo state from previous session
-            "demo_script": previous_state.get("demo_script") if previous_state else None,
-            "demo_step": previous_state.get("demo_step", 1) if previous_state else 1,
-            "docs_uploaded": previous_state.get("docs_uploaded", 0) if previous_state else 0
+        result = {
+            "is_consistent": True,
+            "discrepancies": [],
+            "verified_values": {},
+            "warnings": []
         }
         
-        # Add current message to history
-        initial_state["messages"].append({
+        financial = state.get("financial_data", {})
+        document_state = state.get("document_state", {})
+        user_profile = state.get("user_profile", {})
+        
+        # ---- SALARY CONSISTENCY CHECK ----
+        claimed_salary = financial.get("monthly_income", 0)
+        proven_salary = document_state.get("proven_salary")
+        
+        if proven_salary and claimed_salary > 0:
+            # STRICT RULE: proven_salary must be >= 90% of claimed_salary
+            if proven_salary < (0.9 * claimed_salary):
+                result["is_consistent"] = False
+                result["discrepancies"].append({
+                    "type": "SALARY_DISCREPANCY",
+                    "claimed": claimed_salary,
+                    "proven": proven_salary,
+                    "difference_pct": round((1 - proven_salary/claimed_salary) * 100, 1),
+                    "message": f"Document shows ₹{proven_salary:,}, which is {round((1 - proven_salary/claimed_salary) * 100, 1)}% lower than claimed ₹{claimed_salary:,}"
+                })
+                # Use PROVEN value for underwriting
+                result["verified_values"]["monthly_income"] = proven_salary
+            else:
+                result["verified_values"]["monthly_income"] = proven_salary
+        elif proven_salary:
+            result["verified_values"]["monthly_income"] = proven_salary
+        
+        # ---- NAME CONSISTENCY CHECK ----
+        claimed_name = user_profile.get("name", "")
+        document_name = document_state.get("document_name")
+        name_similarity = document_state.get("name_similarity")
+        
+        if document_name and claimed_name:
+            if name_similarity is not None:
+                if name_similarity < 80:
+                    result["is_consistent"] = False
+                    result["discrepancies"].append({
+                        "type": "NAME_MISMATCH",
+                        "claimed": claimed_name,
+                        "document": document_name,
+                        "similarity": name_similarity,
+                        "message": f"Name mismatch: '{document_name}' vs '{claimed_name}' ({name_similarity}% match)"
+                    })
+                else:
+                    result["verified_values"]["verified_name"] = document_name
+        
+        # ---- PAN CONSISTENCY CHECK ----
+        claimed_pan = user_profile.get("pan")
+        verified_pan = document_state.get("verified_pan")
+        
+        if verified_pan:
+            if claimed_pan and claimed_pan.upper() != verified_pan.upper():
+                result["warnings"].append({
+                    "type": "PAN_UPDATE",
+                    "message": f"PAN updated from {claimed_pan} to {verified_pan} based on document"
+                })
+            result["verified_values"]["pan"] = verified_pan
+        
+        return result
+    
+    # ==================== DOCUMENT AGENT (SPOKE) ====================
+    async def document_agent_node(self, state: AgentState) -> AgentState:
+        """
+        DOCUMENT AGENT
+        
+        Responsibilities:
+        1. Guide user on required documents
+        2. Process uploaded documents
+        3. Verify document authenticity
+        4. Update verification status
+        """
+        log_entry = {
+            "agent": "Document Agent",
+            "timestamp": datetime.now().isoformat(),
+            "action": "document_processing"
+        }
+        
+        user_message = state["current_message"].lower()
+        doc_state = state.get("document_state", {})
+        user_profile = state.get("user_profile", {})
+        financial = state.get("financial_data", {})
+        
+        # Check if user is verified - if not, redirect to verification
+        if not user_profile.get("verified"):
+            log_entry["message"] = "User not verified - redirecting to verification first"
+            log_entry["type"] = "warning"
+            state.setdefault("admin_log", []).append(log_entry)
+            
+            state["ai_response"] = "Before we discuss documents, I'll need to verify your identity first. Could you please share your name and 10-digit phone number?"
+            return state
+        
+        uploaded = doc_state.get("uploaded_docs", [])
+        credit_score = financial.get("credit_score", 650)
+        
+        # Determine required documents based on credit score
+        if credit_score >= 750:
+            required_docs = ["PAN Card", "Salary Slip"]
+        elif credit_score >= 700:
+            required_docs = ["PAN Card", "Salary Slip", "Bank Statement"]
+        else:
+            required_docs = ["PAN Card", "Salary Slip", "Bank Statement", "CIBIL Report"]
+        
+        state["document_state"]["required_docs"] = required_docs
+        pending = [doc for doc in required_docs if doc not in uploaded]
+        state["document_state"]["pending_docs"] = pending
+        
+        # Check if user is asking about documents or has uploaded
+        if "upload" in user_message or "document" in user_message:
+            if len(uploaded) == 0:
+                # First time asking about documents
+                state["ai_response"] = f"""Great! To finalize your loan, I'll need a few quick documents:
+
+📄 **Required Documents:**
+{chr(10).join([f'• {doc}' for doc in required_docs])}
+
+{'Just 2 documents needed - your excellent credit score qualifies you for minimal documentation! 🌟' if credit_score >= 750 else 'Standard documentation for your profile.'}
+
+Click the **📎 Upload** button below to start uploading. You can upload them one by one! 📤"""
+                state["show_upload"] = True
+            else:
+                # Some documents already uploaded
+                state["ai_response"] = f"""Thanks! I've received {len(uploaded)} document(s).
+
+✅ **Uploaded:** {', '.join(uploaded)}
+📄 **Still needed:** {', '.join(pending) if pending else 'All done!'}
+
+{'Upload the remaining documents using the 📎 button below!' if pending else '🎉 All documents received! Processing your application...'}"""
+                state["show_upload"] = len(pending) > 0
+        
+        log_entry["uploaded"] = uploaded
+        log_entry["pending"] = pending
+        log_entry["message"] = f"📄 Docs: {len(uploaded)}/{len(required_docs)} uploaded"
+        log_entry["type"] = "info"
+        
+        state.setdefault("admin_log", []).append(log_entry)
+        return state
+    
+    # ==================== RISK CONTROL AGENT (SPOKE) ====================
+    async def risk_control_agent_node(self, state: AgentState) -> AgentState:
+        """
+        RISK CONTROL AGENT (Fraud Detection)
+        
+        Responsibilities:
+        1. Mathematical Integrity Check for salary components
+        2. Bank Statement Cross-Check for salary credits
+        3. Visual Forgery Detection via Gemini Vision analysis
+        
+        If ANY fraud is detected:
+        - Set fraud_detected = True
+        - Respond with polite rejection message
+        """
+        log_entry = {
+            "agent": "Risk Control Agent",
+            "timestamp": datetime.now().isoformat(),
+            "action": "fraud_detection"
+        }
+        
+        doc_state = state.get("document_state", {})
+        uploaded_docs = doc_state.get("uploaded_docs", [])
+        extracted_data = doc_state.get("extracted_data", {})
+        
+        # Initialize risk control state
+        risk_control = {
+            "fraud_detected": False,
+            "math_check": None,
+            "bank_check": None,
+            "visual_check": [],
+            "overall_status": "PENDING",
+            "fraud_reasons": []
+        }
+        
+        fraud_detected = False
+        fraud_reasons = []
+        
+        # ==================== 1. MATHEMATICAL INTEGRITY CHECK ====================
+        if "Salary Slip" in uploaded_docs:
+            salary_data = extracted_data.get("Salary Slip", {})
+            math_result = validate_salary_math(salary_data)
+            risk_control["math_check"] = math_result
+            
+            log_entry["math_check"] = {
+                "status": math_result["status"],
+                "calculated": math_result.get("calculated_net", 0),
+                "extracted": math_result.get("extracted_net", 0),
+                "difference": math_result.get("difference", 0)
+            }
+            
+            if math_result["status"] == "FRAUD_DETECTED":
+                fraud_detected = True
+                fraud_reasons.append(f"📊 Math Check Failed: {math_result.get('reason', 'Internal inconsistency detected')}")
+        
+        # ==================== 2. BANK STATEMENT CROSS-CHECK ====================
+        if "Salary Slip" in uploaded_docs and "Bank Statement" in uploaded_docs:
+            salary_data = extracted_data.get("Salary Slip", {})
+            bank_data = extracted_data.get("Bank Statement", {})
+            bank_result = cross_check_bank_statement(salary_data, bank_data)
+            risk_control["bank_check"] = bank_result
+            
+            log_entry["bank_check"] = {
+                "status": bank_result["status"],
+                "salary_found": bank_result.get("salary_found", False),
+                "expected": bank_result.get("details", {}).get("expected_salary", 0)
+            }
+            
+            if bank_result["status"] == "DISCREPANCY":
+                fraud_detected = True
+                fraud_reasons.append(f"🏦 Bank Check Failed: {bank_result.get('reason', 'Salary not found in bank statement')}")
+        
+        # ==================== 3. VISUAL FORGERY CHECK ====================
+        visual_results = []
+        for doc_type in uploaded_docs:
+            doc_data = extracted_data.get(doc_type, {})
+            visual_result = check_visual_forgery(doc_data)
+            visual_result["document_type"] = doc_type
+            visual_results.append(visual_result)
+            
+            if visual_result["status"] == "MANUAL_REVIEW":
+                fraud_detected = True
+                fraud_reasons.append(f"🔍 Visual Check ({doc_type}): {visual_result.get('reason', 'Document flagged for manual review')}")
+            elif visual_result["status"] == "WARNING":
+                # Warnings don't trigger fraud, but are logged
+                log_entry.setdefault("warnings", []).append(f"Visual warning on {doc_type}: {visual_result.get('reason')}")
+        
+        risk_control["visual_check"] = visual_results
+        risk_control["fraud_detected"] = fraud_detected
+        risk_control["fraud_reasons"] = fraud_reasons
+        
+        # ==================== DETERMINE RESPONSE ====================
+        if fraud_detected:
+            risk_control["overall_status"] = "FRAUD_DETECTED"
+            
+            # Polite rejection message
+            state["ai_response"] = f"""⚠️ **Document Verification Issue**
+
+I'm having trouble verifying the authenticity of your uploaded documents. This could happen due to:
+- Image quality issues
+- Documents not being original copies
+- Formatting inconsistencies
+
+**What you can do:**
+📄 Please upload the **original PDF** downloaded directly from your payroll portal or bank.
+📸 If uploading photos, ensure they're clear and not cropped.
+
+**Need help?** Our team can assist you at **1800-XXX-XXXX** (Toll-free).
+
+_Your application is safe - you can re-upload the correct documents to continue._"""
+            
+            # Mark documents as needing re-upload
+            doc_state["verification_status"] = "FRAUD_SUSPECTED"
+            doc_state["requires_reupload"] = True
+            state["document_state"] = doc_state
+            
+            log_entry["message"] = f"🚨 FRAUD DETECTED: {'; '.join(fraud_reasons)}"
+            log_entry["type"] = "error"
+        else:
+            risk_control["overall_status"] = "PASSED"
+            
+            # All checks passed - proceed to underwriting
+            state["ai_response"] = f"""✅ **Document Verification Complete**
+
+All your documents have been verified successfully:
+{''.join([f"{chr(10)}• {doc} ✓" for doc in uploaded_docs])}
+
+Your application is now being processed for final approval. I'll update you shortly with your loan offer!"""
+            
+            doc_state["verification_status"] = "VERIFIED"
+            state["document_state"] = doc_state
+            
+            log_entry["message"] = f"✅ All fraud checks passed for {len(uploaded_docs)} documents"
+            log_entry["type"] = "success"
+        
+        # Store risk control state
+        state["risk_control"] = risk_control
+        
+        # Log summary
+        log_entry["fraud_detected"] = fraud_detected
+        log_entry["documents_checked"] = uploaded_docs
+        state.setdefault("admin_log", []).append(log_entry)
+        
+        return state
+    
+    # ==================== RESPONSE NODE ====================
+    async def response_node(self, state: AgentState) -> AgentState:
+        """
+        RESPONSE NODE
+        
+        Final node that ensures a response is set.
+        Adds the response to conversation history.
+        """
+        log_entry = {
+            "agent": "Response Generator",
+            "timestamp": datetime.now().isoformat(),
+            "action": "response_finalization"
+        }
+        
+        # If no response was set by agents, generate a default
+        if not state.get("ai_response"):
+            state["ai_response"] = "I'm here to help you with your loan application! Could you tell me more about what you're looking for?"
+        
+        # Add to conversation history
+        state["conversation_history"].append({
+            "role": "assistant",
+            "content": state["ai_response"],
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        log_entry["message"] = "✓ Response finalized"
+        log_entry["type"] = "success"
+        state.setdefault("admin_log", []).append(log_entry)
+        
+        return state
+    
+    # ==================== MAIN EXECUTION ====================
+    async def process_message(self, user_message: str, 
+                              conversation_history: List = None,
+                              previous_state: Dict = None) -> Dict[str, Any]:
+        """
+        Process a user message through the Hub-and-Spoke architecture.
+        
+        Flow:
+        1. Message arrives at Master Agent (Hub)
+        2. Master analyzes and routes to appropriate Spoke
+        3. Spoke processes and generates response
+        4. Response node finalizes output
+        
+        Returns a dict compatible with main.py expectations:
+        - ai_response: The AI's response text
+        - messages: List of {role, content} for conversation history
+        - admin_log: List of agent activity logs
+        - trust_score: Numeric trust score
+        - name, phone, pan: User details
+        - customer_verified: Boolean
+        - customer_profile: Full customer data
+        - conversation_stage: Current stage
+        - loan_decision: Decision if made
+        - show_upload, show_sanction_letter: UI flags
+        - loan_details: Final loan details if approved
+        """
+        print(f"\n{'='*60}")
+        print("🚀 PROCESSING MESSAGE: Hub-and-Spoke Architecture")
+        print(f"{'='*60}\n")
+        
+        # Restore state from previous interactions
+        restored_user_profile = {}
+        restored_loan_request = {}
+        restored_financial_data = {}
+        restored_negotiation = {}
+        restored_document = {}
+        restored_trust = {}
+        
+        if previous_state:
+            # Handle both old format (flat) and new format (nested)
+            if previous_state.get("user_profile"):
+                restored_user_profile = previous_state["user_profile"]
+            else:
+                # Old flat format
+                restored_user_profile = {
+                    "name": previous_state.get("name"),
+                    "phone": previous_state.get("phone"),
+                    "pan": previous_state.get("pan"),
+                    "verified": previous_state.get("verified")
+                }
+            
+            restored_loan_request = previous_state.get("loan_request", {})
+            restored_financial_data = previous_state.get("financial_data", {})
+            restored_negotiation = previous_state.get("negotiation_state", {})
+            restored_document = previous_state.get("document_state", {})
+            restored_trust = previous_state.get("trust_analysis", {})
+        
+        # Initialize state
+        initial_state: AgentState = {
+            "conversation_history": conversation_history or [],
+            "current_message": user_message,
+            "user_profile": restored_user_profile,
+            "loan_request": restored_loan_request,
+            "financial_data": restored_financial_data,
+            "negotiation_state": restored_negotiation,
+            "document_state": restored_document,
+            "trust_analysis": restored_trust,
+            "decision": {},
+            "next_step": "",
+            "ai_response": "",
+            "show_upload": False,
+            "show_sanction_letter": False,
+            "loan_details": None,
+            "admin_log": []
+        }
+        
+        # Add user message to history
+        initial_state["conversation_history"].append({
             "role": "user",
             "content": user_message,
             "timestamp": datetime.now().isoformat()
         })
         
-        # Execute graph
+        # Execute the graph
         final_state = await self.graph.ainvoke(initial_state)
         
-        # Debug logging
         print(f"\n📊 FINAL STATE:")
-        print(f"Demo Script: {final_state.get('demo_script')}")
-        print(f"Demo Step: {final_state.get('demo_step')}")
-        print(f"Show Upload: {final_state.get('show_upload')}")
-        print(f"Show Sanction: {final_state.get('show_sanction_letter')}\n")
+        print(f"User: {final_state.get('user_profile', {}).get('name', 'Unknown')}")
+        print(f"Trust Score: {final_state.get('trust_analysis', {}).get('trust_score', 'N/A')}")
+        print(f"Response Length: {len(final_state.get('ai_response', ''))}")
+        print(f"{'='*60}\n")
         
-        # Add AI response to messages
-        final_state["messages"].append({
-            "role": "assistant",
-            "content": final_state["ai_response"],
-            "timestamp": datetime.now().isoformat()
-        })
+        # Build response compatible with main.py
+        user_profile = final_state.get("user_profile", {})
+        trust_analysis = final_state.get("trust_analysis", {})
+        financial_data = final_state.get("financial_data", {})
         
-        return final_state
+        # Build customer_profile in expected format
+        customer_profile = None
+        if user_profile.get("verified"):
+            customer_profile = {
+                "name": user_profile.get("name"),
+                "phone": user_profile.get("phone"),
+                "pan": user_profile.get("pan"),
+                "financial_data": financial_data,
+                "behavioral_flags": {
+                    "risk_category": trust_analysis.get("risk_category", "MEDIUM")
+                }
+            }
+        
+        # Determine conversation stage
+        stage = "greeting"
+        if user_profile.get("verified"):
+            if final_state.get("loan_request", {}).get("amount"):
+                stage = "underwriting"
+            else:
+                stage = "offer"
+        elif user_profile.get("name"):
+            stage = "verification"
+        
+        # Convert conversation history to messages format
+        messages = []
+        for msg in final_state.get("conversation_history", []):
+            messages.append({
+                "role": msg.get("role"),
+                "content": msg.get("content")
+            })
+        
+        # Return result in expected format
+        return {
+            # Core response
+            "ai_response": final_state.get("ai_response", ""),
+            "messages": messages,
+            
+            # Admin logging
+            "admin_log": final_state.get("admin_log", []),
+            
+            # Trust & Risk
+            "trust_score": trust_analysis.get("trust_score", 50),
+            "fraud_flags": trust_analysis.get("fraud_flags", []),
+            
+            # User identification
+            "name": user_profile.get("name"),
+            "phone": user_profile.get("phone"),
+            "pan": user_profile.get("pan"),
+            "customer_verified": user_profile.get("verified", False),
+            "customer_profile": customer_profile,
+            "verification_status": "VERIFIED" if user_profile.get("verified") else "PENDING",
+            
+            # Conversation state
+            "conversation_stage": stage,
+            "loan_decision": final_state.get("decision", {}).get("loan_decision"),
+            "missing_info": [],
+            
+            # UI Flags
+            "show_upload": final_state.get("show_upload", False),
+            "show_sanction_letter": final_state.get("show_sanction_letter", False),
+            "loan_details": final_state.get("loan_details"),
+            
+            # Preserve state for next call (nested format)
+            "user_profile": user_profile,
+            "loan_request": final_state.get("loan_request", {}),
+            "financial_data": financial_data,
+            "negotiation_state": final_state.get("negotiation_state", {}),
+            "document_state": final_state.get("document_state", {}),
+            "trust_analysis": trust_analysis
+        }
 
 
-# ==================== HELPER FUNCTIONS ====================
+# ==================== FACTORY FUNCTION ====================
 async def create_agent(gemini_api_key: str) -> LoanAgentGraph:
-    """Factory function to create the agent"""
+    """Factory function to create the Hub-and-Spoke agent"""
     return LoanAgentGraph(gemini_api_key)

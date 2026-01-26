@@ -225,18 +225,10 @@ export function ChatWidget() {
           .trim();
       };
 
-      // Split response into parts for gradual display
-      const responseParts = data.response.split('\n\n').filter((part: string) => part.trim());
-      
-      // Display messages gradually
-      setIsLoading(false);
-      
+      // PHASE 7: Remove artificial delays - network latency is enough
       for (let i = 0; i < responseParts.length; i++) {
         const cleanedPart = cleanText(responseParts[i]);
         if (!cleanedPart) continue;
-        
-        // Wait before showing next part
-        await new Promise(resolve => setTimeout(resolve, i === 0 ? 500 : 1500));
         
         const botMessage: Message = {
           role: 'assistant',

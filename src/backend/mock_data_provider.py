@@ -267,6 +267,65 @@ class MockDataProvider:
         """Retrieve customer profile by phone number"""
         return self.customers.get(phone)
     
+    def create_lead(self, phone: str, name: str = None) -> Dict:
+        """
+        Create a new lead for unknown prospects (from digital ads, etc.)
+        
+        Args:
+            phone: Phone number of the new prospect
+            name: Name of the prospect (optional)
+            
+        Returns:
+            New customer object with default "unknown" values
+        """
+        new_lead = {
+            "name": name or "New Prospect",
+            "phone": phone,
+            "pan": None,
+            "email": None,
+            "age": None,
+            "employment_type": None,
+            "employer": None,
+            "monthly_income": None,
+            "credit_score": None,
+            "existing_loans": None,
+            "total_debt": None,
+            "loan_history": None,
+            "address": None,
+            "kyc_status": "Pending",
+            "risk_category": "UNKNOWN",
+            "fraud_flags": [],
+            "behavioral_score": None,
+            "max_eligible_amount": 0,
+            "interest_rate": None,
+            "tenure_months": None,
+            "approval_probability": None,
+            "is_new_lead": True,  # Flag to identify new prospects
+            "created_at": datetime.now().isoformat()
+        }
+        
+        # Add to customers dictionary for persistence during session
+        self.customers[phone] = new_lead
+        
+        return new_lead
+    
+    def update_lead(self, phone: str, updates: Dict) -> Optional[Dict]:
+        """
+        Update lead information as they provide more details
+        
+        Args:
+            phone: Phone number of the lead
+            updates: Dictionary of fields to update
+            
+        Returns:
+            Updated customer object or None if not found
+        """
+        if phone not in self.customers:
+            return None
+        
+        self.customers[phone].update(updates)
+        return self.customers[phone]
+    
     def get_customer_by_pan(self, pan: str) -> Optional[Dict]:
         """Retrieve customer profile by PAN"""
         for customer in self.customers.values():
