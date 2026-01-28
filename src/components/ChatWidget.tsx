@@ -188,6 +188,9 @@ export function ChatWidget() {
 
     try {
       // ========== BACKEND API CALL - LET BACKEND HANDLE DEMO MODE ==========
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+      
       const response = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: {
@@ -197,13 +200,23 @@ export function ChatWidget() {
           message: currentInput,
           session_id: sessionId
         }),
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
 
       const data = await response.json();
       
       if (data.session_id) {
         setSessionId(data.session_id);
       }
+
+      // Get response text from API
+      const responseText = data.response || 'I received your message but got an empty response.';
 
       // Clean and format the response text
       const cleanText = (text: string): string => {
@@ -225,14 +238,12 @@ export function ChatWidget() {
           .trim();
       };
 
-      // PHASE 7: Remove artificial delays - network latency is enough
-      for (let i = 0; i < responseParts.length; i++) {
-        const cleanedPart = cleanText(responseParts[i]);
-        if (!cleanedPart) continue;
-        
+      // PHASE 7: Display the response directly
+      const cleanedResponse = cleanText(responseText);
+      if (cleanedResponse) {
         const botMessage: Message = {
           role: 'assistant',
-          content: cleanedPart,
+          content: cleanedResponse,
           timestamp: new Date().toISOString()
         };
         
@@ -520,11 +531,19 @@ export function ChatWidget() {
       */
       // END OF OLD FRONTEND DEMO CODE
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Chat error:', error);
+      let errorContent = 'I apologize, but I\'m having trouble connecting to the server. Please try again in a moment.';
+      
+      if (error.name === 'AbortError') {
+        errorContent = 'The request took too long. The AI is processing - please wait a moment and try again.';
+      } else if (error.message?.includes('Failed to fetch')) {
+        errorContent = 'Cannot connect to the server. Please make sure the backend is running on http://localhost:8000';
+      }
+      
       const errorMessage: Message = {
         role: 'assistant',
-        content: 'I apologize, but I\'m having trouble connecting to the server. Please try again in a moment.',
+        content: errorContent,
         timestamp: new Date().toISOString()
       };
       setMessages(prev => [...prev, errorMessage]);

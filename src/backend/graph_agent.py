@@ -27,8 +27,253 @@ from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from pydantic import BaseModel, Field
+import httpx
 
 from mock_data import MockDataProvider
+from api_client import ExternalAPIClient
+
+
+# ==================== API DATA PROVIDER ====================
+class APIDataProvider:
+    """
+    Data provider that fetches data via HTTP from external microservices.
+    
+    This replaces direct data access with real API calls to demonstrate
+    microservices architecture. Each method makes HTTP requests to our
+    mock external services (Credit Bureau, CRM, Offer Engine).
+    """
+    
+    def __init__(self, base_url: str = "http://localhost:8000/external-api"):
+        self.base_url = base_url
+        self.api_client = ExternalAPIClient(base_url)
+        self._fallback = MockDataProvider()  # Fallback if API is down
+        self._api_events = []  # Track API call events for admin dashboard
+        
+    def get_api_events(self) -> List[Dict[str, Any]]:
+        """Get and clear accumulated API events for admin dashboard"""
+        events = self._api_events.copy()
+        self._api_events.clear()
+        return events
+    
+    def _log_api_event(self, event_type: str, data: Dict[str, Any]):
+        """Log an API event for the admin dashboard"""
+        self._api_events.append({
+            "type": event_type,
+            "data": data,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    def get_customer_by_phone(self, phone: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch customer KYC data from CRM API.
+        
+        Makes a real HTTP GET request to /external-api/crm/customer/{phone}
+        Falls back to local data if API is unavailable.
+        """
+        clean_phone = "".join(filter(str.isdigit, phone))
+        
+        # Log API call event
+        self._log_api_event("API_CALL_CRM", {
+            "service": "CRM",
+            "endpoint": f"/crm/customer/{clean_phone[-4:].rjust(10, 'X')}",
+            "agent": "Verification"
+        })
+        
+        try:
+            # Use synchronous request for compatibility with existing code
+            with httpx.Client(timeout=10.0) as client:
+                print(f"\n{'='*50}")
+                print(f"🔗 CONNECTING TO CRM SERVER...")
+                print(f"   Endpoint: GET /external-api/crm/customer/{clean_phone}")
+                print(f"   Phone: XXXXXX{clean_phone[-4:]}")
+                print(f"{'='*50}")
+                
+                response = client.get(f"{self.base_url}/crm/customer/{clean_phone}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    print(f"✅ CRM RESPONSE:")
+                    print(f"   Customer: {data.get('name')}")
+                    print(f"   KYC Status: {data.get('kyc_status')}")
+                    
+                    # Log successful API response
+                    self._log_api_event("API_RESPONSE_CRM", {
+                        "service": "CRM",
+                        "found": True,
+                        "name": data.get("name"),
+                        "kyc_status": data.get("kyc_status"),
+                        "agent": "Verification"
+                    })
+                    
+                    # Transform CRM response to match expected format
+                    # CRM returns financial_summary, we need financial_data
+                    fin_summary = data.get("financial_summary", {})
+                    risk_profile = data.get("risk_profile", {})
+                    
+                    customer_data = {
+                        "name": data.get("name"),
+                        "phone": data.get("phone"),
+                        "pan": data.get("pan"),
+                        "email": data.get("email"),
+                        "financial_data": {
+                            "credit_score": fin_summary.get("credit_score", 0),
+                            "annual_income": fin_summary.get("annual_income", 0),
+                            "monthly_income": fin_summary.get("monthly_income", 0),
+                            "employment_type": fin_summary.get("employment_type", "Unknown"),
+                            "company": fin_summary.get("company", "Unknown"),
+                            "work_experience_years": fin_summary.get("work_experience_years", 0),
+                            "existing_loans": fin_summary.get("existing_loans", []),
+                            "total_monthly_debt": fin_summary.get("existing_debt", 0),
+                            "debt_to_income_ratio": fin_summary.get("debt_to_income_ratio", 0),
+                            "bank_balance": fin_summary.get("bank_balance", 0),
+                        },
+                        "behavioral_flags": {
+                            "loan_history": risk_profile.get("loan_history", "Unknown"),
+                            "payment_delays": risk_profile.get("payment_delays", 0),
+                            "fraud_alerts": risk_profile.get("fraud_alerts", 0),
+                            "bounced_cheques": risk_profile.get("bounced_cheques", 0),
+                            "risk_category": risk_profile.get("category", "Unknown"),
+                        },
+                        "application_history": data.get("application_history", [])
+                    }
+                    return customer_data
+                    
+                elif response.status_code == 404:
+                    print(f"⚠️ CRM: Customer not found")
+                    # Log not found response
+                    self._log_api_event("API_RESPONSE_CRM", {
+                        "service": "CRM",
+                        "found": False,
+                        "agent": "Verification"
+                    })
+                    return None
+                else:
+                    print(f"❌ CRM ERROR: {response.status_code}")
+                    return None
+                    
+        except httpx.TimeoutException:
+            print(f"⏱️ CRM TIMEOUT - Using fallback")
+            return self._fallback.get_customer_by_phone(clean_phone)
+        except Exception as e:
+            print(f"❌ CRM CONNECTION ERROR: {e} - Using fallback")
+            return self._fallback.get_customer_by_phone(clean_phone)
+    
+    def get_credit_score(self, pan_number: str) -> Dict[str, Any]:
+        """
+        Fetch credit score from Credit Bureau API.
+        
+        Makes a real HTTP POST request to /external-api/credit-bureau/score
+        """
+        # Log API call event
+        self._log_api_event("API_CALL_CREDIT_BUREAU", {
+            "service": "CIBIL",
+            "pan": f"{pan_number[:4]}XXXX{pan_number[-2:]}",
+            "agent": "Verification"
+        })
+        
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                print(f"\n{'='*50}")
+                print(f"🔗 CONNECTING TO CREDIT BUREAU (CIBIL)...")
+                print(f"   Endpoint: POST /external-api/credit-bureau/score")
+                print(f"   PAN: {pan_number[:4]}XXXX{pan_number[-2:]}")
+                print(f"{'='*50}")
+                
+                response = client.post(
+                    f"{self.base_url}/credit-bureau/score",
+                    json={"pan_number": pan_number, "consent": True}
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    print(f"✅ CREDIT BUREAU RESPONSE:")
+                    print(f"   Credit Score: {data.get('credit_score')}")
+                    print(f"   Score Band: {data.get('score_band')}")
+                    
+                    # Log successful API response
+                    self._log_api_event("API_RESPONSE_CREDIT_BUREAU", {
+                        "service": "CIBIL",
+                        "credit_score": data.get("credit_score"),
+                        "score_band": data.get("score_band"),
+                        "agent": "Verification"
+                    })
+                    return data
+                else:
+                    print(f"❌ CREDIT BUREAU ERROR: {response.status_code}")
+                    return {"error": True, "credit_score": 0}
+                    
+        except Exception as e:
+            print(f"❌ CREDIT BUREAU CONNECTION ERROR: {e}")
+            return {"error": True, "credit_score": 0, "message": str(e)}
+    
+    def calculate_offer(
+        self, 
+        monthly_income: float, 
+        credit_score: int,
+        existing_emi: float = 0,
+        employment_type: str = "Salaried"
+    ) -> Dict[str, Any]:
+        """
+        Calculate pre-approved loan offer from Offer Engine API.
+        
+        Makes a real HTTP POST request to /external-api/offers/calculate
+        """
+        # Log API call event
+        self._log_api_event("API_CALL_OFFER_ENGINE", {
+            "service": "Offer Engine",
+            "income": monthly_income,
+            "agent": "Underwriting"
+        })
+        
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                print(f"\n{'='*50}")
+                print(f"🔗 CONNECTING TO OFFER ENGINE...")
+                print(f"   Endpoint: POST /external-api/offers/calculate")
+                print(f"   Income: ₹{monthly_income:,.0f}/month")
+                print(f"   Credit Score: {credit_score}")
+                print(f"{'='*50}")
+                
+                response = client.post(
+                    f"{self.base_url}/offers/calculate",
+                    json={
+                        "monthly_income": monthly_income,
+                        "credit_score": credit_score,
+                        "existing_emi": existing_emi,
+                        "employment_type": employment_type
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    print(f"✅ OFFER ENGINE RESPONSE:")
+                    print(f"   Pre-Approved Limit: ₹{data.get('pre_approved_limit'):,}")
+                    print(f"   Eligibility: {data.get('eligibility_status')}")
+                    
+                    # Log successful API response
+                    self._log_api_event("API_RESPONSE_OFFER_ENGINE", {
+                        "service": "Offer Engine",
+                        "pre_approved_limit": data.get("pre_approved_limit"),
+                        "eligibility_status": data.get("eligibility_status"),
+                        "agent": "Underwriting"
+                    })
+                    return data
+                else:
+                    print(f"❌ OFFER ENGINE ERROR: {response.status_code}")
+                    return {"error": True, "pre_approved_limit": 0}
+                    
+        except Exception as e:
+            print(f"❌ OFFER ENGINE CONNECTION ERROR: {e}")
+            return {"error": True, "pre_approved_limit": 0, "message": str(e)}
+    
+    def fuzzy_match_by_name(self, name: str, threshold: float = 0.7) -> Dict[str, Any]:
+        """
+        Find customer by fuzzy name matching.
+        Delegates to MockDataProvider for now since CRM API doesn't support fuzzy search.
+        
+        In production, this would call a CRM search endpoint with fuzzy matching.
+        """
+        return self._fallback.fuzzy_match_by_name(name, threshold)
 
 
 # ==================== STATE DEFINITION ====================
@@ -46,6 +291,7 @@ class AgentState(TypedDict):
     
     # Loan Request Details
     loan_request: Dict[str, Any]  # {amount, tenure, purpose, type}
+    pending_loan_request: Dict[str, Any]  # Loan amount mentioned before verification
     
     # Financial Data (from verification)
     financial_data: Dict[str, Any]  # {credit_score, monthly_income, annual_income, 
@@ -64,6 +310,9 @@ class AgentState(TypedDict):
     # Trust & Risk Analysis
     trust_analysis: Dict[str, Any]  # {trust_score, risk_category, fraud_flags, 
                                      #  behavioral_score, red_flags}
+    
+    # OTP Verification State
+    otp_state: Dict[str, Any]  # {otp_sent, otp_code, otp_phone, otp_verified, otp_attempts}
     
     # Decision State
     decision: Dict[str, Any]  # {loan_decision, conditions, decline_reason}
@@ -350,6 +599,194 @@ def check_visual_forgery(extracted_data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+# ==================== OTP VERIFICATION SYSTEM ====================
+import random
+import string
+
+# Twilio SMS Integration
+try:
+    from twilio.rest import Client as TwilioClient
+    TWILIO_AVAILABLE = True
+except ImportError:
+    TWILIO_AVAILABLE = False
+    print("⚠️ Twilio not installed. SMS OTP will not be sent.")
+
+# Twilio Configuration - Set these in environment variables
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER", "")  # Your Twilio phone number
+
+# Test users with fixed OTP for testing
+TEST_USERS_OTP = {
+    "9876543210": "123",  # Priya Sharma
+    "9988776655": "123",  # Amit Patel
+    "9123456789": "123",  # Rajesh Kumar
+}
+
+def send_sms_otp(phone: str, otp: str) -> dict:
+    """
+    Send OTP via SMS using Twilio.
+    
+    Args:
+        phone: 10-digit phone number (Indian format)
+        otp: OTP to send
+        
+    Returns:
+        Dict with status and message
+    """
+    result = {
+        "success": False,
+        "message": "",
+        "sid": None
+    }
+    
+    # Check if Twilio is configured
+    if not TWILIO_AVAILABLE:
+        result["message"] = "Twilio SDK not installed"
+        return result
+    
+    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
+        result["message"] = "Twilio credentials not configured"
+        print("⚠️ Twilio not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER environment variables.")
+        return result
+    
+    try:
+        # Initialize Twilio client
+        client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        
+        # Format phone number for India (+91)
+        formatted_phone = f"+91{phone}" if not phone.startswith("+") else phone
+        
+        # Send SMS
+        message = client.messages.create(
+            body=f"Your Tata Capital loan verification OTP is: {otp}. Valid for 5 minutes. Do not share this OTP with anyone.",
+            from_=TWILIO_PHONE_NUMBER,
+            to=formatted_phone
+        )
+        
+        result["success"] = True
+        result["message"] = f"OTP sent successfully to {formatted_phone[-4:].rjust(10, 'X')}"
+        result["sid"] = message.sid
+        print(f"✅ SMS sent to {formatted_phone[-4:].rjust(10, 'X')} - SID: {message.sid}")
+        
+    except Exception as e:
+        result["message"] = f"Failed to send SMS: {str(e)}"
+        print(f"❌ SMS sending failed: {str(e)}")
+    
+    return result
+
+def generate_otp(phone: str, send_sms: bool = True) -> tuple[str, dict]:
+    """
+    Generate OTP for phone verification.
+    For test users (Priya, Amit, Rajesh), returns fixed OTP "123" (no SMS sent).
+    For other users, generates a random 6-digit OTP and sends via SMS.
+    
+    Args:
+        phone: 10-digit phone number
+        send_sms: Whether to send SMS (default True)
+        
+    Returns:
+        Tuple of (OTP string, SMS result dict)
+    """
+    sms_result = {"success": False, "message": "SMS not sent", "is_test_user": False}
+    
+    # Check if this is a test user
+    if phone in TEST_USERS_OTP:
+        sms_result["is_test_user"] = True
+        sms_result["message"] = "Test user - fixed OTP 123"
+        return TEST_USERS_OTP[phone], sms_result
+    
+    # Generate random 6-digit OTP for real users
+    otp = ''.join(random.choices(string.digits, k=6))
+    
+    # Send SMS if requested
+    if send_sms:
+        sms_result = send_sms_otp(phone, otp)
+        sms_result["is_test_user"] = False
+    
+    return otp, sms_result
+
+def verify_otp(phone: str, entered_otp: str, expected_otp: str) -> bool:
+    """
+    Verify OTP entered by user.
+    
+    Args:
+        phone: User's phone number
+        entered_otp: OTP entered by user
+        expected_otp: OTP that was sent to user
+        
+    Returns:
+        True if OTP matches, False otherwise
+    """
+    # Clean the entered OTP
+    entered_otp = entered_otp.strip()
+    
+    return entered_otp == expected_otp
+
+def extract_otp_from_message(message: str) -> Optional[str]:
+    """
+    Extract OTP from user's message.
+    Handles various formats like "123", "my otp is 123", "otp: 123456", etc.
+    
+    Args:
+        message: User's message
+        
+    Returns:
+        Extracted OTP string or None if not found
+    """
+    import re
+    
+    # Clean message
+    message = message.strip().lower()
+    
+    # Pattern 1: Just digits (common for OTP responses)
+    if re.match(r'^\d{3,6}$', message):
+        return message
+    
+    # Pattern 2: "otp is 123" or "otp: 123456" or "my otp is 123"
+    otp_patterns = [
+        r'otp\s*(?:is|:|\s)\s*(\d{3,6})',
+        r'code\s*(?:is|:|\s)\s*(\d{3,6})',
+        r'(\d{3,6})\s*(?:is|:)?\s*(?:the\s*)?otp',
+        r'verify(?:ing)?\s*(?:with)?\s*(\d{3,6})',
+    ]
+    
+    for pattern in otp_patterns:
+        match = re.search(pattern, message)
+        if match:
+            return match.group(1)
+    
+    # Pattern 3: Find any 3-6 digit number in the message
+    numbers = re.findall(r'\b(\d{3,6})\b', message)
+    if len(numbers) == 1:
+        return numbers[0]
+    
+    return None
+
+def is_otp_request_message(message: str) -> bool:
+    """
+    Check if user's message is likely an OTP submission.
+    
+    Args:
+        message: User's message
+        
+    Returns:
+        True if message appears to be OTP submission
+    """
+    message = message.strip().lower()
+    
+    # Pure digit message (3-6 digits)
+    if message.isdigit() and 3 <= len(message) <= 6:
+        return True
+    
+    # Contains OTP-related keywords
+    otp_keywords = ['otp', 'code', 'verify', 'verification']
+    if any(keyword in message for keyword in otp_keywords):
+        return True
+    
+    return False
+
+
 # ==================== ROUTING DECISIONS ====================
 class RoutingDecision(BaseModel):
     """Structured output for Master Agent routing decisions"""
@@ -425,8 +862,8 @@ class GeminiLLM:
         api_key = os.environ.get("GEMINI_API_KEY")
         genai.configure(api_key=api_key)
         
-        # Use gemini-1.5-flash for vision (supports multimodal)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Use gemini-2.0-flash for vision (supports multimodal)
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
         # Create the image part
         image_part = {
@@ -474,7 +911,7 @@ class LoanAgentGraph:
     
     def __init__(self, gemini_api_key: str):
         self.llm = GeminiLLM(gemini_api_key)
-        self.data_provider = MockDataProvider()
+        self.data_provider = APIDataProvider()  # Uses HTTP calls to external microservices
         self.graph = self._build_graph()
         
         print("\n" + "="*60)
@@ -483,6 +920,7 @@ class LoanAgentGraph:
         print("📍 Mode: PRODUCTION (Full Gemini AI)")
         print("🔀 Architecture: Hub-and-Spoke Multi-Agent")
         print("🤖 Agents: Master, Sales, Verification, Underwriting, Trust, Document")
+        print("🌐 Data Source: External Microservices (CRM, Credit Bureau, Offer Engine)")
         print("="*60 + "\n")
     
     def _build_graph(self) -> StateGraph:
@@ -551,17 +989,41 @@ class LoanAgentGraph:
         user_message = state["current_message"]
         user_message_lower = user_message.lower().strip()
         
+        # ==================== EXTRACT AND STORE PENDING LOAN AMOUNT ====================
+        # Check if user is mentioning a loan amount before they're verified
+        is_verified = state.get("user_profile", {}).get("verified", False)
+        if not is_verified:
+            # Check for loan amount mentions
+            loan_amount_patterns = ["lakh", "lakhs", "lac", "lacs", "want", "need", "borrow"]
+            if any(p in user_message_lower for p in loan_amount_patterns):
+                # Try to extract the amount
+                import re
+                amount_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:lakh|lakhs|lac|lacs)', user_message_lower)
+                if amount_match:
+                    pending_amount = int(float(amount_match.group(1)) * 100000)
+                    state["pending_loan_request"] = {"amount": pending_amount}
+                    log_entry["pending_loan_amount"] = pending_amount
+                    log_entry["message"] = f"Stored pending loan request: Rs. {pending_amount:,}"
+        
         # Check if user is confirming their identity (pending_match flow)
         pending_match = state.get("user_profile", {}).get("pending_match")
         if pending_match:
-            confirmation_phrases = ["yes", "that's me", "thats me", "yes that's me", "correct", "yep", "yeah", "confirm", "that is me"]
-            if any(phrase in user_message_lower for phrase in confirmation_phrases):
+            # Expanded confirmation phrases including common typos
+            confirmation_phrases = [
+                "yes", "yess", "yss", "ys", "ya", "yaa", "yup", "yep", "yeah", "yea",
+                "that's me", "thats me", "that is me", "its me", "it's me", "it is me",
+                "correct", "right", "true", "affirmative", "absolutely",
+                "confirm", "confirmed", "i confirm", "yes confirm",
+                "yes that's me", "yes thats me", "yes it's me", "yes its me",
+                "haan", "ha", "ji", "ji haan", "sahi hai", "theek hai", "ok", "okay"
+            ]
+            if any(phrase in user_message_lower for phrase in confirmation_phrases) or user_message_lower in ["y", "yes", "yss", "yep"]:
                 # User confirmed - route to verification to complete the process
                 state["user_profile"]["confirmed_match"] = True
                 state["next_step"] = "verification"
                 log_entry["routing"] = "verification"
                 log_entry["reasoning"] = "User confirmed their identity"
-                log_entry["message"] = "→ Routing to Verification Agent: User confirmed identity"
+                log_entry["message"] = "-> Routing to Verification Agent: User confirmed identity"
                 log_entry["type"] = "info"
                 state.setdefault("admin_log", []).append(log_entry)
                 return state
@@ -715,49 +1177,153 @@ Analyze the message carefully and choose the MOST appropriate agent."""
         loan_request = state.get("loan_request", {})
         
         try:
-            # Build sales context - PHASE 4 ENHANCEMENT
+            # Build sales context
             customer_name = user_profile.get("name", "valued customer")
             credit_score = financial.get("credit_score", 0)
             current_rate = negotiation.get("current_offered_rate")
             floor_rate = negotiation.get("floor_rate")
             attempt_count = negotiation.get("attempt_count", 0)
             loan_amount = loan_request.get("amount", 0)
+            emi = loan_request.get("emi", 0)
             
-            # Get underwriting decision from strict rule engine
+            # Get underwriting decision
             underwriting_decision = loan_request.get("underwriting_decision")
             underwriting_reason = loan_request.get("underwriting_reason")
             
-            # PHASE 4: Handle different underwriting decisions
-            if underwriting_decision == "REJECT":
+            # Check user intent
+            user_msg_lower = state["current_message"].lower()
+            negotiation_keywords = ["lower", "reduce", "less", "better", "discount", "negotiate", "cheaper"]
+            proceed_keywords = ["proceed", "accept", "ok", "okay", "fine", "agree", "done", "confirm", "yes proceed", "let's do it", "go ahead"]
+            
+            # ==================== NEGOTIATION FLOW ====================
+            # Business Rule: Max 2 negotiation attempts, then firm offer
+            max_negotiations = 2
+            
+            if loan_amount > 0 and current_rate and any(kw in user_msg_lower for kw in negotiation_keywords):
+                new_count = attempt_count + 1
+                state["negotiation_state"]["attempt_count"] = new_count
+                
+                # Check if already exhausted negotiation attempts
+                if new_count > max_negotiations:
+                    state["ai_response"] = f"""{customer_name}, I've already given you our best possible rate at {current_rate}% p.a.
+
+This rate is **non-negotiable** and already reflects a special discount for your excellent credit profile.
+
+**Your Final Offer:**
+- Loan Amount: Rs. {loan_amount:,}
+- Interest Rate: {current_rate}% p.a.
+- Monthly EMI: Rs. {emi:,}
+- Tenure: 36 months
+
+Would you like to proceed? This rate is locked for the next 24 hours."""
+                    log_entry["negotiation_attempt"] = new_count
+                    log_entry["message"] = "Max negotiations reached - presenting final offer"
+                
+                elif current_rate > floor_rate:
+                    # Can reduce rate - but only by small amount
+                    reduction = 0.25
+                    new_rate = max(floor_rate, round(current_rate - reduction, 2))
+                    state["negotiation_state"]["current_offered_rate"] = new_rate
+                    
+                    # Calculate new EMI
+                    monthly_rate = new_rate / 100 / 12
+                    tenure_months = 36
+                    new_emi = int(loan_amount * monthly_rate * ((1 + monthly_rate) ** tenure_months) / (((1 + monthly_rate) ** tenure_months) - 1))
+                    state["loan_request"]["emi"] = new_emi
+                    
+                    log_entry["rate_change"] = f"{current_rate}% -> {new_rate}%"
+                    log_entry["negotiation_attempt"] = new_count
+                    
+                    if new_rate == floor_rate or new_count == max_negotiations:
+                        # This is the final offer
+                        savings = int((emi - new_emi) * 36) if emi > 0 else 0
+                        state["ai_response"] = f"""Alright {customer_name}, I spoke with my manager and this is the **absolute best** I can do:
+
+**Your Final Offer:**
+- Loan Amount: Rs. {loan_amount:,}
+- **Interest Rate: {new_rate}% p.a.** (reduced from {current_rate}%)
+- **Monthly EMI: Rs. {new_emi:,}**
+- Tenure: 36 months
+- **You Save: Rs. {savings:,}** over the loan tenure
+
+This is a **special rate** reserved for premium customers. I cannot reduce it further.
+
+Shall I proceed with the disbursement?"""
+                    else:
+                        savings = int((emi - new_emi) * 36) if emi > 0 else 0
+                        state["ai_response"] = f"""I managed to get approval for a small reduction, {customer_name}.
+
+**Your Updated Offer:**
+- Loan Amount: Rs. {loan_amount:,}
+- **Interest Rate: {new_rate}% p.a.** (down from {current_rate}%)
+- **Monthly EMI: Rs. {new_emi:,}**
+- Tenure: 36 months
+- **You Save: Rs. {savings:,}** over the loan tenure
+
+Shall I proceed with this offer?"""
+                else:
+                    # Already at floor rate
+                    state["ai_response"] = f"""I understand you'd like a lower rate, {customer_name}, but {floor_rate}% is genuinely our lowest rate.
+
+This is a **premium rate** that we only offer to customers with exceptional credit profiles like yours (780+ score).
+
+**Your Offer:**
+- Loan Amount: Rs. {loan_amount:,}
+- Interest Rate: {floor_rate}% p.a. (Best Available)
+- Monthly EMI: Rs. {emi:,}
+- Tenure: 36 months
+
+Would you like to proceed?"""
+                
+                log_entry["negotiation_attempt"] = new_count
+            
+            # ==================== PROCEED/ACCEPT FLOW ====================
+            elif loan_amount > 0 and any(kw in user_msg_lower for kw in proceed_keywords):
+                state["loan_request"]["status"] = "ACCEPTED"
+                state["ai_response"] = f"""Wonderful, {customer_name}! Let me finalize your loan.
+
+**Confirmed Loan Details:**
+- Loan Amount: Rs. {loan_amount:,}
+- Interest Rate: {current_rate}% p.a.
+- Monthly EMI: Rs. {emi:,}
+- Tenure: 36 months
+- First EMI Date: 5th of next month
+
+**Next Steps:**
+1. Please upload your Salary Slip for verification
+2. Once verified, the amount will be disbursed within 24 hours
+
+Click the upload button below to proceed."""
+                state["show_upload"] = True
+            
+            # ==================== UNDERWRITING DECISIONS ====================
+            elif underwriting_decision == "REJECT":
                 state["ai_response"] = f"""I understand your interest in a personal loan, {customer_name}. 
 
-Unfortunately, after running our assessment, I'm unable to approve your application at this time. Here's why:
-
-**{underwriting_reason}**
-
-**Tips to improve your eligibility:**
-• Work on improving your credit score through timely payments
-• Pay down existing debts to improve your debt-to-income ratio  
-• Consider applying for a smaller loan amount
-• Wait 3-6 months and apply again
-
-I'm here to help you succeed financially! Would you like tips on credit improvement?"""
-            
-            elif underwriting_decision == "APPROVE_INSTANT":
-                emi = loan_request.get("emi", 0)
-                state["ai_response"] = f"""🎉 Fantastic news, {customer_name}! 
-
-**Your loan is INSTANTLY APPROVED!**
-
-**Loan Details:**
-💰 Amount: ₹{loan_amount:,}
-📈 Interest Rate: {current_rate}% per annum  
-💳 Monthly EMI: ₹{emi:,}
-⏰ Tenure: 36 months
+Unfortunately, after reviewing your application, I'm unable to approve it at this time.
 
 **Reason:** {underwriting_reason}
 
-Would you like to proceed with this offer, or would you like me to see if I can get you a **better rate**?"""
+**Tips to improve your eligibility:**
+- Work on improving your credit score through timely payments
+- Pay down existing debts to improve your debt-to-income ratio  
+- Consider applying for a smaller loan amount
+- Wait 3-6 months and apply again
+
+Would you like tips on credit improvement?"""
+            
+            elif underwriting_decision == "APPROVE_INSTANT":
+                state["ai_response"] = f"""Fantastic news, {customer_name}!
+
+**Your loan of Rs. {loan_amount:,} is INSTANTLY APPROVED!**
+
+**Loan Details:**
+- Amount: Rs. {loan_amount:,}
+- Interest Rate: {current_rate}% per annum  
+- Monthly EMI: Rs. {emi:,}
+- Tenure: 36 months
+
+This is a competitive rate based on your excellent credit profile. Shall I proceed with the disbursement?"""
             
             elif underwriting_decision == "APPROVE_WITH_DOCS":
                 emi = loan_request.get("emi", 0)
@@ -766,71 +1332,71 @@ Would you like to proceed with this offer, or would you like me to see if I can 
 **Your loan is CONDITIONALLY APPROVED!**
 
 **Loan Details:**
-💰 Amount: ₹{loan_amount:,}
-📈 Interest Rate: {current_rate}% per annum  
-💳 Monthly EMI: ₹{emi:,}
-⏰ Tenure: 36 months
+- Amount: Rs. {loan_amount:,}
+- Interest Rate: {current_rate}% per annum  
+- Monthly EMI: Rs. {emi:,}
+- Tenure: 36 months
 
 **Condition:** Please upload your salary slip for income verification.
 
 **Reason:** {underwriting_reason}
 
-Would you like to proceed, or shall I try to get you a better rate first?"""
+Shall I proceed? Please upload your salary slip to continue."""
             
             else:
-                # Standard sales flow
-                sales_prompt = f"""You are a professional Tata Capital loan officer. Be warm but professional.
+                # Standard sales flow - user is greeting or asking general questions
+                # Check if user has shared name/phone yet
+                if not user_profile.get("name") and not user_profile.get("phone"):
+                    # New user - ask for identity
+                    state["ai_response"] = f"""Hello! Welcome to Tata Capital!
 
-CONTEXT:
-- Customer: {customer_name}  
-- Credit Score: {credit_score}
-- Loan Amount: ₹{loan_amount:,}
-- Current Rate: {current_rate}%
-- Floor Rate: {floor_rate}%  
-- Negotiation Attempts: {attempt_count}
+I'm your AI Loan Assistant, here to help you get **instant pre-approval** for a personal loan!
 
-PERSONA: Helpful, warm, and professional loan officer.
+To get started, please share:
+- Your full name
+- Your 10-digit mobile number
 
-NEGOTIATION RULES:
-- Each attempt can reduce rate by 0.25% until floor_rate
-- If at floor_rate and attempt_count >= 3: "This is the absolute best I can do for a premium customer like you."
-- Highlight benefits and urgency when offering better rates"""
+This helps me check your eligibility and pre-approved offers!"""
+                elif user_profile.get("name") and not user_profile.get("phone"):
+                    # Have name but no phone
+                    name = user_profile.get("name")
+                    state["ai_response"] = f"""Nice to meet you, {name}!
 
-                response = await self.llm.generate(
-                    sales_prompt,
-                    state["current_message"],
-                    state.get("conversation_history", [])
-                )
-                state["ai_response"] = response
-            
-            # PHASE 4: Negotiation Logic with Floor Rate
-            user_msg_lower = state["current_message"].lower()
-            negotiation_keywords = ["lower", "reduce", "less", "better", "discount", "negotiate"]
-            
-            if current_rate and floor_rate and any(kw in user_msg_lower for kw in negotiation_keywords):
-                new_count = attempt_count + 1
-                state["negotiation_state"]["attempt_count"] = new_count
-                
-                # Reduce rate if not at floor
-                if current_rate > floor_rate:
-                    reduction = 0.25  # Fixed 0.25% reduction per attempt
-                    new_rate = max(floor_rate, round(current_rate - reduction, 2))
-                    state["negotiation_state"]["current_offered_rate"] = new_rate
-                    log_entry["rate_change"] = f"{current_rate}% → {new_rate}%"
+To check your eligibility and any pre-approved offers, I'll need your **10-digit mobile number**.
+
+This is completely secure and helps me fetch your profile instantly!"""
+                elif user_profile.get("verified"):
+                    # User is verified - handle general queries
+                    name = user_profile.get("name", "there")
+                    pre_approved = financial.get("pre_approved_limit", 0)
                     
-                    # Update response for negotiation
-                    if new_rate == floor_rate and new_count >= 2:
-                        state["ai_response"] += f"\n\n**Special Rate: {new_rate}%** - This is the absolute best I can do for a premium customer like you. This rate is locked for 48 hours only!"
+                    if pre_approved > 0:
+                        state["ai_response"] = f"""Hi {name}! Great to have you here!
+
+I can see you have a **pre-approved loan limit of Rs. {pre_approved:,}**!
+
+How much would you like to borrow today? Just tell me the amount and I'll get you instant approval!"""
                     else:
-                        state["ai_response"] += f"\n\n**Better Rate: {new_rate}%** - I managed to get you a better deal!"
+                        state["ai_response"] = f"""Hi {name}! How can I help you today?
+
+I can assist you with:
+- Personal loan applications
+- Checking your eligibility
+- EMI calculations
+- Document requirements
+
+What would you like to know?"""
                 else:
-                    state["ai_response"] += f"\n\nI understand you'd like a lower rate, but {floor_rate}% is truly the absolute best rate we can offer for your profile. This is already a premium rate reserved for our best customers!"
-                
-                log_entry["negotiation_attempt"] = new_count
+                    # Fallback for other cases
+                    state["ai_response"] = """Hello! Welcome to Tata Capital!
+
+I'm here to help you with personal loans. To serve you better, could you please share:
+- Your full name
+- Your 10-digit mobile number"""
             
         except Exception as e:
-            print(f"❌ Sales Agent error: {e}")
-            state["ai_response"] = "Hello! Welcome to Tata Capital! 👋 I'm here to help you with your personal loan needs. Could you please share your name and phone number so I can check your eligibility?"
+            print(f"Sales Agent error: {e}")
+            state["ai_response"] = "Hello! Welcome to Tata Capital! I'm here to help you with your personal loan needs. Could you please share your name and phone number so I can check your eligibility?"
             log_entry["error"] = str(e)
             log_entry["type"] = "warning"
         
@@ -893,26 +1459,123 @@ Examples:
                 print(f"Name check error: {e}")
                 # Continue with normal flow if extraction fails
         
-        # Check if user confirmed a pending match
+        # ==================== OTP VERIFICATION CHECK ====================
+        # Initialize OTP state if not exists
+        if "otp_state" not in state:
+            state["otp_state"] = {}
+        
+        otp_state = state.get("otp_state", {})
+        
+        # Check if OTP was sent and user is responding with OTP
+        if otp_state.get("otp_sent") and not otp_state.get("otp_verified"):
+            # User should be entering OTP
+            entered_otp = extract_otp_from_message(user_message)
+            
+            if entered_otp:
+                expected_otp = otp_state.get("otp_code")
+                otp_phone = otp_state.get("otp_phone")
+                otp_attempts = otp_state.get("otp_attempts", 0) + 1
+                state["otp_state"]["otp_attempts"] = otp_attempts
+                
+                if verify_otp(otp_phone, entered_otp, expected_otp):
+                    # OTP verified successfully!
+                    state["otp_state"]["otp_verified"] = True
+                    log_entry["message"] = f"✓ OTP verified successfully for phone {otp_phone[-4:].rjust(10, 'X')}"
+                    log_entry["type"] = "success"
+                    
+                    # Restore phone to user_profile if needed
+                    if not state.get("user_profile"):
+                        state["user_profile"] = {}
+                    state["user_profile"]["phone"] = otp_phone
+                    if otp_state.get("otp_name"):
+                        state["user_profile"]["name"] = otp_state.get("otp_name")
+                    
+                    # Get customer data and proceed with verification
+                    customer_data = self.data_provider.get_customer_by_phone(otp_phone)
+                    if customer_data:
+                        match_type = "PHONE_OTP_VERIFIED"
+                        # Continue to customer_data processing below
+                    else:
+                        # Phone not in database - treat as new prospect
+                        match_type = "NEW_PROSPECT_OTP_VERIFIED"
+                        # Skip the extraction block - we already have the phone
+                else:
+                    # Wrong OTP
+                    if otp_attempts >= 3:
+                        # Too many attempts - reset OTP flow
+                        state["otp_state"] = {}
+                        log_entry["message"] = f"✗ OTP verification failed after 3 attempts for {otp_phone[-4:].rjust(10, 'X')}"
+                        log_entry["type"] = "error"
+                        state.setdefault("admin_log", []).append(log_entry)
+                        
+                        state["ai_response"] = "You've exceeded the maximum OTP attempts. For security reasons, please start over by sharing your phone number again."
+                        return state
+                    else:
+                        remaining = 3 - otp_attempts
+                        log_entry["message"] = f"✗ Wrong OTP entered. Attempts: {otp_attempts}/3"
+                        log_entry["type"] = "warning"
+                        state.setdefault("admin_log", []).append(log_entry)
+                        
+                        state["ai_response"] = f"That OTP doesn't match. Please check and try again. You have {remaining} attempt{'s' if remaining > 1 else ''} remaining."
+                        return state
+            else:
+                # User didn't enter OTP - remind them
+                otp_phone = otp_state.get("otp_phone", "")
+                is_test_user = otp_phone in TEST_USERS_OTP
+                
+                if is_test_user:
+                    state["ai_response"] = f"Please enter the OTP sent to your phone number ending with {otp_phone[-4:]}. (Test account: Use OTP **123**)"
+                else:
+                    state["ai_response"] = f"Please enter the 6-digit OTP sent to your phone number ending with {otp_phone[-4:]}."
+                return state
+        
+        # Check if user confirmed a pending match - now needs OTP
         if state.get("user_profile", {}).get("confirmed_match") and state.get("user_profile", {}).get("pending_match"):
-            customer_data = state["user_profile"]["pending_match"]
-            match_type = "CONFIRMED_NAME_MATCH"
-            state["user_profile"]["phone"] = customer_data.get("phone")
-            # Clear the pending state
-            del state["user_profile"]["pending_match"]
-            del state["user_profile"]["confirmed_match"]
+            pending_customer = state["user_profile"]["pending_match"]
+            pending_phone = pending_customer.get("phone")
+            pending_name = pending_customer.get("name")
             
-            # Skip extraction, go directly to verification success flow
-            state["user_profile"]["name"] = customer_data.get("name")
-            log_entry["message"] = f"✓ User confirmed identity: {customer_data.get('name')}"
-            log_entry["type"] = "success"
-            
-            # Skip to customer_data processing (jump to the if customer_data block)
-            # We'll set the flag and let it fall through
+            # Check if OTP already verified for this match
+            if otp_state.get("otp_verified") and otp_state.get("otp_phone") == pending_phone:
+                # OTP already verified - proceed with customer data
+                customer_data = pending_customer
+                match_type = "CONFIRMED_NAME_OTP_VERIFIED"
+                state["user_profile"]["phone"] = pending_phone
+                del state["user_profile"]["pending_match"]
+                del state["user_profile"]["confirmed_match"]
+                state["user_profile"]["name"] = customer_data.get("name")
+                log_entry["message"] = f"✓ User confirmed identity with OTP: {customer_data.get('name')}"
+                log_entry["type"] = "success"
+            else:
+                # Need to send OTP for the confirmed match
+                otp_code, sms_result = generate_otp(pending_phone)
+                state["otp_state"] = {
+                    "otp_sent": True,
+                    "otp_code": otp_code,
+                    "otp_phone": pending_phone,
+                    "otp_verified": False,
+                    "otp_attempts": 0,
+                    "otp_name": pending_name,
+                    "sms_result": sms_result
+                }
+                
+                is_test_user = sms_result.get("is_test_user", False)
+                sms_sent = sms_result.get("success", False)
+                log_entry["message"] = f"📱 OTP {'sent via SMS' if sms_sent else 'generated'} for {pending_phone[-4:].rjust(10, 'X')} ({pending_name})" + (" (Test: 123)" if is_test_user else f" - SMS: {sms_result.get('message', 'N/A')}")
+                log_entry["type"] = "info"
+                state.setdefault("admin_log", []).append(log_entry)
+                
+                # Show OTP directly in chat for demo purposes
+                state["ai_response"] = f"Great! To verify it's you, {pending_name}, I've sent an OTP to your phone number ending with {pending_phone[-4:]}.\n\n**Your OTP: {otp_code}**\n\nPlease enter the OTP to continue."
+                return state
         
         if not customer_data:
-            # Need to extract entities and verify - normal flow
-            extraction_prompt = """Extract the following information from the user's message. 
+            # Skip extraction if OTP was just verified (we already have the phone)
+            otp_just_verified = otp_state.get("otp_verified") and match_type in ["NEW_PROSPECT_OTP_VERIFIED", None]
+            
+            if not otp_just_verified:
+                # Need to extract entities and verify - normal flow
+                extraction_prompt = """Extract the following information from the user's message. 
 Return ONLY a JSON object with these fields (use null if not found):
 {
     "name": "Full name of the person",
@@ -925,88 +1588,155 @@ Examples:
 - "My name is Amit Patel, phone 91234 56789" -> {"name": "Amit Patel", "phone": "9123456789", "pan": null}
 - "Rajesh Kumar here, PAN is ABCDE1234F" -> {"name": "Rajesh Kumar", "phone": null, "pan": "ABCDE1234F"}"""
 
-            try:
-                extraction_response = await self.llm.generate(
-                    extraction_prompt, 
-                    user_message,
-                    []
-                )
-                
-                # Parse JSON from response
-                json_match = extraction_response
-                if "```" in json_match:
-                    json_match = json_match.split("```")[1].replace("json", "").strip()
-                
-                extracted = json.loads(json_match)
-                
-                # Update user profile
-                if not state.get("user_profile"):
-                    state["user_profile"] = {}
-                
-                if extracted.get("name"):
-                    state["user_profile"]["name"] = extracted["name"]
-                if extracted.get("phone"):
-                    state["user_profile"]["phone"] = extracted["phone"]
-                if extracted.get("pan"):
-                    state["user_profile"]["pan"] = extracted["pan"]
-                
-                log_entry["extracted"] = extracted
-                log_entry["message"] = f"✓ Extracted: {extracted}"
-                log_entry["type"] = "success"
-                
-                # Try to verify against database
-                phone = state["user_profile"].get("phone")
-                name = state["user_profile"].get("name")
-                
-                # Strategy 1: Exact phone match (preferred - most secure)
-                if phone:
-                    customer_data = self.data_provider.get_customer_by_phone(phone)
-                    if customer_data:
-                        match_type = "PHONE_MATCH"
-                
-                # Strategy 2: Fuzzy name match (fallback - only if unique match)
-                if not customer_data and name:
-                    fuzzy_result = self.data_provider.fuzzy_match_by_name(name)
+                try:
+                    extraction_response = await self.llm.generate(
+                        extraction_prompt, 
+                        user_message,
+                        []
+                    )
                     
-                    if fuzzy_result.get("unique") and fuzzy_result.get("customer"):
-                        # Found a match - but ask for confirmation first
-                        matched_customer = fuzzy_result["customer"]
-                        matched_name = matched_customer.get("name")
-                        matched_phone_last4 = matched_customer.get("phone", "")[-4:]
-                        
-                        state["user_profile"]["pending_match"] = matched_customer
-                        state["user_profile"]["verified"] = False
-                        
-                        log_entry["verification_status"] = "PENDING_CONFIRMATION"
-                        log_entry["message"] = f"Found potential match: {matched_name} - awaiting confirmation"
-                        log_entry["type"] = "info"
-                        
-                        state["ai_response"] = f"I found a profile: {matched_name}, Phone: XXXX{matched_phone_last4}. Is this you? Please confirm or share your 10-digit phone number for verification."
-                        
-                        state.setdefault("admin_log", []).append(log_entry)
-                        return state
+                    # Parse JSON from response
+                    json_match = extraction_response
+                    if "```" in json_match:
+                        json_match = json_match.split("```")[1].replace("json", "").strip()
                     
-                    elif fuzzy_result.get("matches") and len(fuzzy_result["matches"]) > 1:
-                        # Multiple people with similar names - ask for phone
-                        names_found = fuzzy_result.get("names_found", [])
-                        state["user_profile"]["verified"] = False
-                        log_entry["verification_status"] = "MULTIPLE_MATCHES"
-                        log_entry["message"] = f"Multiple customers found with similar name: {names_found}"
-                        log_entry["type"] = "warning"
+                    extracted = json.loads(json_match)
+                    
+                    # Update user profile
+                    if not state.get("user_profile"):
+                        state["user_profile"] = {}
+                    
+                    if extracted.get("name"):
+                        state["user_profile"]["name"] = extracted["name"]
+                    if extracted.get("phone"):
+                        state["user_profile"]["phone"] = extracted["phone"]
+                    if extracted.get("pan"):
+                        state["user_profile"]["pan"] = extracted["pan"]
+                    
+                    log_entry["extracted"] = extracted
+                    log_entry["message"] = f"✓ Extracted: {extracted}"
+                    log_entry["type"] = "success"
+                    
+                    # Try to verify against database
+                    phone = state["user_profile"].get("phone")
+                    name = state["user_profile"].get("name")
+                    
+                    # Strategy 1: Exact phone match (preferred - most secure) - Now requires OTP
+                    if phone:
+                        found_customer = self.data_provider.get_customer_by_phone(phone)
                         
-                        state["ai_response"] = f"Hi {name}! I found multiple customers with similar names. For security, could you please share your **10-digit phone number** so I can pull up the right account?"
+                        # Add API call events to admin_log for dashboard visibility
+                        for api_event in self.data_provider.get_api_events():
+                            state.setdefault("admin_log", []).append({
+                                "agent": api_event["data"].get("agent", "System"),
+                                "timestamp": api_event["timestamp"],
+                                "type": api_event["type"],
+                                "message": f"🌐 {api_event['type']}: {api_event['data'].get('service', 'API')}",
+                                "api_event": api_event
+                            })
                         
-                        state.setdefault("admin_log", []).append(log_entry)
-                        return state
-                
-            except Exception as e:
-                print(f"❌ Verification extraction error: {e}")
-                log_entry["error"] = str(e)
-                log_entry["type"] = "warning"
-                
-                state["ai_response"] = "I'd love to help you! Could you please share your name and 10-digit phone number? For example: 'I am Priya and my number is 9876543210'"
-                state.setdefault("admin_log", []).append(log_entry)
-                return state
+                        if found_customer:
+                            # Found customer - need OTP verification first
+                            customer_name = found_customer.get("name")
+                            
+                            # Check if OTP already verified for this phone
+                            if otp_state.get("otp_verified") and otp_state.get("otp_phone") == phone:
+                                # OTP already verified - proceed
+                                customer_data = found_customer
+                                match_type = "PHONE_OTP_VERIFIED"
+                            else:
+                                # Send OTP for verification
+                                otp_code, sms_result = generate_otp(phone)
+                                state["otp_state"] = {
+                                    "otp_sent": True,
+                                    "otp_code": otp_code,
+                                    "otp_phone": phone,
+                                    "otp_verified": False,
+                                    "otp_attempts": 0,
+                                    "otp_name": customer_name,
+                                    "sms_result": sms_result
+                                }
+                                
+                                is_test_user = sms_result.get("is_test_user", False)
+                                sms_sent = sms_result.get("success", False)
+                                log_entry["verification_status"] = "OTP_SENT"
+                                log_entry["message"] = f"📱 OTP {'sent via SMS' if sms_sent else 'generated'} for {phone[-4:].rjust(10, 'X')} ({customer_name})" + (" (Test: 123)" if is_test_user else f" - SMS: {sms_result.get('message', 'N/A')}")
+                                log_entry["type"] = "info"
+                                state.setdefault("admin_log", []).append(log_entry)
+                                
+                                # Show OTP directly in chat for demo purposes
+                                state["ai_response"] = f"Hi {customer_name}! I found your profile. To verify it's you, I've sent an OTP to your phone number ending with {phone[-4:]}.\n\n**Your OTP: {otp_code}**\n\nPlease enter the OTP to continue."
+                                return state
+                        else:
+                            # Phone not in database - this is a new prospect, also need OTP
+                            # For new users, still send OTP for phone verification (real SMS for non-test users)
+                            otp_code, sms_result = generate_otp(phone)
+                            state["otp_state"] = {
+                                "otp_sent": True,
+                                "otp_code": otp_code,
+                                "otp_phone": phone,
+                                "otp_verified": False,
+                                "otp_attempts": 0,
+                                "otp_name": name or "New Prospect",
+                                "is_new_prospect": True,
+                                "sms_result": sms_result
+                            }
+                            
+                            is_test_user = sms_result.get("is_test_user", False)
+                            sms_sent = sms_result.get("success", False)
+                            log_entry["verification_status"] = "OTP_SENT_NEW_PROSPECT"
+                            log_entry["message"] = f"📱 OTP {'sent via SMS' if sms_sent else 'generated'} for new prospect {phone[-4:].rjust(10, 'X')}" + (" (Test: 123)" if is_test_user else f" - SMS: {sms_result.get('message', 'N/A')}")
+                            log_entry["type"] = "info"
+                            log_entry["otp_for_demo"] = otp_code if not sms_sent and not is_test_user else None
+                            state.setdefault("admin_log", []).append(log_entry)
+                            
+                            # Show OTP directly in chat for demo purposes
+                            state["ai_response"] = f"Welcome{', ' + name if name else ''}! To verify your phone number, I've sent an OTP to your number ending with {phone[-4:]}.\n\n**Your OTP: {otp_code}**\n\nPlease enter the OTP to continue."
+                            return state
+                    
+                    # Strategy 2: Fuzzy name match (fallback - only if unique match)
+                    if not customer_data and name:
+                        fuzzy_result = self.data_provider.fuzzy_match_by_name(name)
+                        
+                        if fuzzy_result.get("unique") and fuzzy_result.get("customer"):
+                            # Found a match - but ask for confirmation first
+                            matched_customer = fuzzy_result["customer"]
+                            matched_name = matched_customer.get("name")
+                            matched_phone_last4 = matched_customer.get("phone", "")[-4:]
+                            
+                            state["user_profile"]["pending_match"] = matched_customer
+                            state["user_profile"]["verified"] = False
+                            
+                            log_entry["verification_status"] = "PENDING_CONFIRMATION"
+                            log_entry["message"] = f"Found potential match: {matched_name} - awaiting confirmation"
+                            log_entry["type"] = "info"
+                            
+                            state["ai_response"] = f"Hi! I found a profile for **{matched_name}** with phone number ending in **{matched_phone_last4}**. Is this you?"
+                            
+                            state.setdefault("admin_log", []).append(log_entry)
+                            return state
+                        
+                        elif fuzzy_result.get("matches") and len(fuzzy_result["matches"]) > 1:
+                            # Multiple people with similar names - ask for phone
+                            names_found = fuzzy_result.get("names_found", [])
+                            state["user_profile"]["verified"] = False
+                            log_entry["verification_status"] = "MULTIPLE_MATCHES"
+                            log_entry["message"] = f"Multiple customers found with similar name: {names_found}"
+                            log_entry["type"] = "warning"
+                            
+                            state["ai_response"] = f"Hi {name}! I found multiple profiles with similar names. Could you please share your **phone number** so I can pull up the correct account?"
+                            
+                            state.setdefault("admin_log", []).append(log_entry)
+                            return state
+                    
+                except Exception as e:
+                    print(f"❌ Verification extraction error: {e}")
+                    log_entry["error"] = str(e)
+                    log_entry["type"] = "warning"
+                    
+                    state["ai_response"] = "I'd be happy to help you! Could you please share your **name** and **phone number**?"
+                    state.setdefault("admin_log", []).append(log_entry)
+                    return state
                 
         # Process verified customer data (works for both phone match and confirmed name match)
         if customer_data:
@@ -1062,45 +1792,191 @@ Examples:
                 "max_attempts": 3
             }
             
-            # Get risk category
+            # ====== ENHANCED TRUST ANALYSIS (Auto-triggered after verification) ======
             behavioral = customer_data.get("behavioral_flags", {})
+            risk_category = behavioral.get("risk_category", "MEDIUM")
+            payment_delays = behavioral.get("payment_delays", 0)
+            fraud_alerts = behavioral.get("fraud_alerts", 0)
+            bounced_cheques = behavioral.get("bounced_cheques", 0)
+            
+            # Calculate comprehensive trust score based on CRM data
+            trust_score = 100
+            fraud_flags = []
+            
+            # Credit score impact
+            if credit_score >= 750:
+                trust_score -= 0
+            elif credit_score >= 700:
+                trust_score -= 10
+            elif credit_score >= 650:
+                trust_score -= 20
+            else:
+                trust_score -= 35
+                fraud_flags.append(f"Low credit score: {credit_score}")
+            
+            # Risk category impact
+            if risk_category == "FRAUD":
+                trust_score -= 50
+                fraud_flags.append("🚨 FRAUD ALERT: Customer flagged for fraud")
+            elif risk_category == "HIGH_RISK":
+                trust_score -= 30
+                fraud_flags.append("⚠️ High-risk customer profile")
+            elif risk_category == "YELLOW_FLAG":
+                trust_score -= 15
+                fraud_flags.append("⚠️ Yellow flag: Requires additional verification")
+            
+            # Payment history impact
+            if payment_delays > 0:
+                trust_score -= min(payment_delays * 5, 20)
+                fraud_flags.append(f"Payment delays: {payment_delays} instances")
+            
+            # Fraud alerts impact
+            if fraud_alerts > 0:
+                trust_score -= fraud_alerts * 15
+                fraud_flags.append(f"🚨 Active fraud alerts: {fraud_alerts}")
+            
+            # Bounced cheques impact
+            if bounced_cheques > 0:
+                trust_score -= bounced_cheques * 10
+                fraud_flags.append(f"Bounced cheques: {bounced_cheques}")
+            
+            # Ensure score is within bounds
+            trust_score = max(0, min(100, trust_score))
+            
             state["trust_analysis"] = {
-                "trust_score": 70 if credit_score >= 700 else 50,
-                "risk_category": behavioral.get("risk_category", "MEDIUM"),
-                "fraud_flags": [],
-                "behavioral_score": 80 if behavioral.get("payment_delays", 0) == 0 else 60
+                "trust_score": trust_score,
+                "risk_category": risk_category,
+                "fraud_flags": fraud_flags,
+                "behavioral_score": 80 if payment_delays == 0 else 60,
+                "credit_score": credit_score,
+                "analysis_source": "CRM_BEHAVIORAL_DATA"
             }
+            
+            # Log Trust Analysis to Admin Dashboard
+            trust_log_entry = {
+                "agent": "Trust & Safety Agent",
+                "timestamp": datetime.now().isoformat(),
+                "action": "automated_trust_analysis",
+                "trust_score": trust_score,
+                "risk_category": risk_category,
+                "type": "error" if risk_category == "FRAUD" else ("warning" if risk_category in ["HIGH_RISK", "YELLOW_FLAG"] else "success"),
+                "message": f"🛡️ Trust Analysis: Score {trust_score}/100 | Risk: {risk_category}" + (f" | Flags: {len(fraud_flags)}" if fraud_flags else "")
+            }
+            state.setdefault("admin_log", []).append(trust_log_entry)
+            
+            # Log individual fraud flags if any
+            for flag in fraud_flags:
+                flag_log = {
+                    "agent": "Trust & Safety Agent",
+                    "timestamp": datetime.now().isoformat(),
+                    "type": "error" if "FRAUD" in flag or "🚨" in flag else "warning",
+                    "message": f"  └─ {flag}"
+                }
+                state.setdefault("admin_log", []).append(flag_log)
             
             log_entry["verification_status"] = "VERIFIED"
             log_entry["match_type"] = match_type
             log_entry["credit_score"] = credit_score
-            log_entry["message"] = f"✓ Customer verified ({match_type}): {state['user_profile']['name']} (Credit: {credit_score})"
+            log_entry["trust_score"] = trust_score
+            log_entry["message"] = f"✓ Customer verified ({match_type}): {state['user_profile']['name']} (Credit: {credit_score}, Trust: {trust_score})"
             
             # Mark as existing customer
             state["user_profile"]["user_type"] = "EXISTING_CUSTOMER"
             state["user_profile"]["is_new_lead"] = False
             
-            # Generate verification response for EXISTING CUSTOMER
+            # Check for pending loan request that was mentioned before verification
+            pending_loan = state.get("pending_loan_request", {})
+            pending_amount = pending_loan.get("amount", 0)
+            
+            # Also check loan_request.pending_message for stored loan intent
+            if pending_amount == 0:
+                pending_message = state.get("loan_request", {}).get("pending_message", "")
+                if pending_message:
+                    import re
+                    amount_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:lakh|lakhs|lac|lacs)', pending_message.lower())
+                    if amount_match:
+                        pending_amount = int(float(amount_match.group(1)) * 100000)
+                        log_entry["extracted_from_pending_message"] = pending_message
+            
             name = state["user_profile"]["name"]
-            state["ai_response"] = f"""Welcome back, {name}! 👋 Great to see you again!
+            
+            if pending_amount > 0:
+                # User already mentioned loan amount - process it directly!
+                log_entry["pending_loan_processed"] = pending_amount
+                
+                # Store the loan request
+                state["loan_request"] = state.get("loan_request", {})
+                state["loan_request"]["amount"] = pending_amount
+                
+                # Check if amount is within pre-approved limit
+                if pending_amount <= pre_approved:
+                    # Calculate EMI
+                    monthly_rate = initial_rate / 100 / 12
+                    tenure = 36
+                    emi = int(pending_amount * monthly_rate * ((1 + monthly_rate) ** tenure) / (((1 + monthly_rate) ** tenure) - 1))
+                    
+                    state["loan_request"]["emi"] = emi
+                    state["loan_request"]["underwriting_decision"] = "APPROVE_INSTANT"
+                    state["loan_request"]["underwriting_reason"] = "Pre-approved customer within limit"
+                    
+                    state["ai_response"] = f"""Welcome back, {name}! Great news!
 
-🎉 **You have a pre-approved offer waiting!**
+**Your loan of Rs. {pending_amount:,} is INSTANTLY APPROVED!**
 
 **Your Profile:**
-• Credit Score: **{credit_score}/900** {'(Excellent! 🌟)' if credit_score >= 750 else '(Good!)' if credit_score >= 700 else '(Fair)'}
-• **Pre-approved Limit:** ₹{pre_approved:,}
-• Interest Rate: Starting from {floor_rate}% p.a.
-• Employment: {fin_data.get('employment_type', 'Salaried')} at {fin_data.get('company', 'your company')}
+- Credit Score: **{credit_score}/900** {'(Excellent!)' if credit_score >= 750 else '(Good!)' if credit_score >= 700 else '(Fair)'}
+- Pre-approved Limit: Rs. {pre_approved:,}
+
+**Loan Details:**
+- Amount: Rs. {pending_amount:,}
+- Interest Rate: {initial_rate}% per annum
+- Monthly EMI: Rs. {emi:,}
+- Tenure: 36 months
+
+This is a competitive rate based on your excellent credit profile. Shall I proceed with the disbursement?"""
+                else:
+                    state["ai_response"] = f"""Welcome back, {name}!
+
+I see you're interested in Rs. {pending_amount:,}, but your pre-approved limit is Rs. {pre_approved:,}.
+
+**Your Profile:**
+- Credit Score: **{credit_score}/900**
+- Pre-approved Limit: Rs. {pre_approved:,}
+
+Would you like to proceed with a loan up to Rs. {pre_approved:,}, or provide additional income documents to qualify for a higher amount?"""
+                
+                # Clear pending request
+                state["pending_loan_request"] = {}
+                if "pending_message" in state.get("loan_request", {}):
+                    del state["loan_request"]["pending_message"]
+            else:
+                # No pending loan - show standard welcome
+                state["ai_response"] = f"""Welcome back, {name}! Great to see you again!
+
+**You have a pre-approved offer waiting!**
+
+**Your Profile:**
+- Credit Score: **{credit_score}/900** {'(Excellent!)' if credit_score >= 750 else '(Good!)' if credit_score >= 700 else '(Fair)'}
+- **Pre-approved Limit:** Rs. {pre_approved:,}
+- Interest Rate: Starting from {floor_rate}% p.a.
+- Employment: {fin_data.get('employment_type', 'Salaried')} at {fin_data.get('company', 'your company')}
 
 Would you like to proceed with your pre-approved offer? Just tell me how much you'd like to borrow!"""
                     
         else:
-            # NEW PROSPECT FLOW - Create lead instead of failing
+            # NEW PROSPECT FLOW - Create lead only after OTP verification
             name = state["user_profile"].get("name")
             phone = state["user_profile"].get("phone")
             
-            # Create a new lead in the database
-            if phone:
+            # Check if OTP was verified for new prospect
+            otp_verified_for_new = (
+                otp_state.get("otp_verified") and 
+                otp_state.get("is_new_prospect") and 
+                otp_state.get("otp_phone") == phone
+            )
+            
+            # Create a new lead in the database only if OTP is verified
+            if phone and otp_verified_for_new:
                 customer_data = self.data_provider.create_lead(phone, name)
                 state["user_profile"]["verified"] = True  # We created them, so they're verified
                 state["user_profile"]["user_type"] = "NEW_PROSPECT"
@@ -1143,23 +2019,23 @@ Would you like to proceed with your pre-approved offer? Just tell me how much yo
                 # Generate new prospect welcome message
                 display_name = name if name and name.lower() not in ["none", "null", ""] else ""
                 if display_name:
-                    state["ai_response"] = f"""Hi {display_name}, thanks for choosing Tata Capital! 🎉
+                    state["ai_response"] = f"""Hi {display_name}, thanks for choosing Tata Capital!
 
 I see you're new here - welcome aboard! 
 
 To check your loan eligibility, I'll need a few details:
 
-**First, what is your monthly salary?** 💰
+**First, what is your monthly salary?**
 
 (This helps me calculate your loan limit and the best interest rate for you)"""
                 else:
-                    state["ai_response"] = f"""Hi there, thanks for choosing Tata Capital! 🎉
+                    state["ai_response"] = f"""Hi there, thanks for choosing Tata Capital!
 
 I see you're new here - welcome aboard!
 
 To get started, could you please tell me:
 1. **Your name**
-2. **Your monthly salary** 💰
+2. **Your monthly salary**
 
 This helps me calculate your loan eligibility!"""
             else:
@@ -1171,13 +2047,13 @@ This helps me calculate your loan eligibility!"""
                 
                 display_name = name if name and name.lower() not in ["none", "null", ""] else ""
                 if display_name:
-                    state["ai_response"] = f"""Hi {display_name}! Welcome to Tata Capital! 🎉
+                    state["ai_response"] = f"""Hi {display_name}! Welcome to Tata Capital!
 
 To get you started and check your loan eligibility, I'll need your **10-digit phone number**.
 
 This helps me create your profile and give you personalized loan offers!"""
                 else:
-                    state["ai_response"] = """Welcome to Tata Capital! 🎉
+                    state["ai_response"] = """Welcome to Tata Capital!
 
 I'd love to help you with a personal loan. To get started, please share:
 - Your **name**
@@ -1211,35 +2087,41 @@ Example: "I am Rahul and my number is 9876543210\""""
             log_entry["message"] = "User not verified - redirecting to verification first"
             log_entry["type"] = "warning"
             state.setdefault("admin_log", []).append(log_entry)
-            
             # Save the loan request intent for later
-            state["loan_request"]["pending_message"] = state["current_message"]
-            
             state["ai_response"] = "I'd love to help you with that loan! But first, I need to verify your identity. Could you please share your name and 10-digit phone number?"
             return state
-        
+
+        # ...existing code...
+
         user_message = state["current_message"].lower()
         financial = state.get("financial_data", {})
         user_profile = state.get("user_profile", {})
-        negotiation = state.get("negotiation_state", {})
-        is_new_lead = user_profile.get("is_new_lead", False)
-        
-        # NEW PROSPECT FLOW: Collect missing financial information first
-        if is_new_lead:
-            monthly_income = financial.get("monthly_income")
-            credit_score = financial.get("credit_score")
-            
-            # Try to extract salary/income from the message
-            income_prompt = """Extract salary/income information from this message. Return ONLY a JSON object:
-{"monthly_income": <number in rupees or null>, "employment_type": "<Salaried/Self-Employed/Business or null>"}
 
-Examples:
-- "my salary is 75000" -> {"monthly_income": 75000, "employment_type": "Salaried"}
-- "I earn 1.2 lakh per month" -> {"monthly_income": 120000, "employment_type": "Salaried"}
-- "I'm self employed making around 80k" -> {"monthly_income": 80000, "employment_type": "Self-Employed"}
-- "50k monthly" -> {"monthly_income": 50000, "employment_type": null}
-- "I need a loan" -> {"monthly_income": null, "employment_type": null}
-- "my annual income is 12 lakhs" -> {"monthly_income": 100000, "employment_type": "Salaried"}"""
+        negotiation = state.get("negotiation_state", {})
+
+        monthly_income = financial.get("monthly_income")
+        credit_score = financial.get("credit_score")
+
+        # Try to extract salary/income from the message
+        income_prompt = """Extract salary/income information from this message. Return ONLY a JSON object:
+    {"monthly_income": <number in rupees or null>, "employment_type": "<Salaried/Self-Employed/Business or null>"}
+
+    IMPORTANT: If the user gives ANNUAL/YEARLY salary, DIVIDE BY 12 to get monthly income.
+    - "per annum", "yearly", "annual", "p.a.", "PA", "per year" = ANNUAL (divide by 12)
+    - "monthly", "per month", "p.m.", "PM" = MONTHLY (use as is)
+
+    Examples:
+    - "my salary is 75000" -> {"monthly_income": 75000, "employment_type": "Salaried"}
+    - "I earn 1.2 lakh per month" -> {"monthly_income": 120000, "employment_type": "Salaried"}
+    - "I'm self employed making around 80k" -> {"monthly_income": 80000, "employment_type": "Self-Employed"}
+    - "50k monthly" -> {"monthly_income": 50000, "employment_type": null}
+    - "I need a loan" -> {"monthly_income": null, "employment_type": null}
+    - "my annual income is 12 lakhs" -> {"monthly_income": 100000, "employment_type": "Salaried"}
+    - "25 lakhs per annum" -> {"monthly_income": 208333, "employment_type": "Salaried"}
+- "I earn 24 lakh yearly" -> {"monthly_income": 200000, "employment_type": "Salaried"}
+- "my CTC is 18 lakhs PA" -> {"monthly_income": 150000, "employment_type": "Salaried"}
+- "annual salary 30 lakh" -> {"monthly_income": 250000, "employment_type": "Salaried"}
+- "2 lakhs monthly" -> {"monthly_income": 200000, "employment_type": "Salaried"}"""
 
             try:
                 income_response = await self.llm.generate(income_prompt, user_message, [])
@@ -1292,13 +2174,11 @@ Examples:
 
 Based on your income, here's what I can offer:
 
-📊 **Your Eligibility:**
-- **Pre-approved Limit:** Up to ₹{pre_approved:,}
+**Your Eligibility:**
+- **Pre-approved Limit:** Up to Rs. {pre_approved:,}
 - **Interest Rate:** Starting from {state["negotiation_state"]["current_offered_rate"]}% p.a.
 
-💡 For an even better rate and higher limit, you can share your **PAN card number** so I can check your credit score.
-
-Or, just tell me **how much you'd like to borrow** and I'll calculate your EMI! 💰"""
+Just tell me **how much you'd like to borrow** and I'll process your application!"""
                     
                     state.setdefault("admin_log", []).append(log_entry)
                     return state
@@ -1309,11 +2189,11 @@ Or, just tell me **how much you'd like to borrow** and I'll calculate your EMI! 
             # If we still don't have income, ask for it
             if not monthly_income:
                 customer_name = user_profile.get("name", "there")
-                state["ai_response"] = f"""Hi {customer_name}! To check your loan eligibility, I need to know your monthly income.
+                state["ai_response"] = f"""Hi {customer_name}! To check your loan eligibility, I need to know your income.
 
-**What is your monthly salary/income?** 💰
+**What is your salary/income?** 💰
 
-For example: "My salary is 75,000 per month" or "I earn 1.2 lakhs monthly"
+For example: "My salary is 75,000 per month" or "I earn 25 lakhs per annum"
 
 This helps me calculate the best loan offer for you!"""
                 
@@ -1495,14 +2375,12 @@ Would you like tips on credit improvement?"""
 **Your loan is INSTANTLY APPROVED!**
 
 **Loan Details:**
-- Amount: Rs {requested_amount:,}{' for ' + purpose if purpose else ''}
+- Amount: Rs. {requested_amount:,}{' for ' + purpose if purpose else ''}
 - Interest Rate: {current_rate}% per annum
-- Monthly EMI: Rs {emi:,}
+- Monthly EMI: Rs. {emi:,}
 - Tenure: {tenure} months
 
-**Reason:** {reason}
-
-Would you like to proceed with this offer, or would you like me to see if I can get you a **better rate**?"""
+This is a competitive rate based on your credit profile. Shall I proceed with the disbursement?"""
             
         elif decision == "APPROVE_WITH_DOCS":
             state["ai_response"] = f"""Great news, {name}!
@@ -1517,9 +2395,7 @@ Would you like to proceed with this offer, or would you like me to see if I can 
 
 **Condition:** Please upload your salary slip for income verification.
 
-**Reason:** {reason}
-
-Would you like to proceed, or shall I try to get you a better rate first?"""
+Please upload your salary slip to proceed with the disbursement."""
         
         state.setdefault("admin_log", []).append(log_entry)
         return state
@@ -1858,7 +2734,7 @@ Click the **📎 Upload** button below to start uploading. You can upload them o
             risk_control["overall_status"] = "FRAUD_DETECTED"
             
             # Polite rejection message
-            state["ai_response"] = f"""⚠️ **Document Verification Issue**
+            state["ai_response"] = f"""**Document Verification Issue**
 
 I'm having trouble verifying the authenticity of your uploaded documents. This could happen due to:
 - Image quality issues
@@ -1866,8 +2742,8 @@ I'm having trouble verifying the authenticity of your uploaded documents. This c
 - Formatting inconsistencies
 
 **What you can do:**
-📄 Please upload the **original PDF** downloaded directly from your payroll portal or bank.
-📸 If uploading photos, ensure they're clear and not cropped.
+- Please upload the **original PDF** downloaded directly from your payroll portal or bank.
+- If uploading photos, ensure they're clear and not cropped.
 
 **Need help?** Our team can assist you at **1800-XXX-XXXX** (Toll-free).
 
@@ -1884,10 +2760,10 @@ _Your application is safe - you can re-upload the correct documents to continue.
             risk_control["overall_status"] = "PASSED"
             
             # All checks passed - proceed to underwriting
-            state["ai_response"] = f"""✅ **Document Verification Complete**
+            state["ai_response"] = f"""**Document Verification Complete**
 
 All your documents have been verified successfully:
-{''.join([f"{chr(10)}• {doc} ✓" for doc in uploaded_docs])}
+{''.join([f"{chr(10)}- {doc} (Verified)" for doc in uploaded_docs])}
 
 Your application is now being processed for final approval. I'll update you shortly with your loan offer!"""
             
@@ -1971,10 +2847,12 @@ Your application is now being processed for final approval. I'll update you shor
         # Restore state from previous interactions
         restored_user_profile = {}
         restored_loan_request = {}
+        restored_pending_loan = {}
         restored_financial_data = {}
         restored_negotiation = {}
         restored_document = {}
         restored_trust = {}
+        restored_otp = {}
         
         if previous_state:
             # Handle both old format (flat) and new format (nested)
@@ -1990,10 +2868,12 @@ Your application is now being processed for final approval. I'll update you shor
                 }
             
             restored_loan_request = previous_state.get("loan_request", {})
+            restored_pending_loan = previous_state.get("pending_loan_request", {})
             restored_financial_data = previous_state.get("financial_data", {})
             restored_negotiation = previous_state.get("negotiation_state", {})
             restored_document = previous_state.get("document_state", {})
             restored_trust = previous_state.get("trust_analysis", {})
+            restored_otp = previous_state.get("otp_state", {})
         
         # Initialize state
         initial_state: AgentState = {
@@ -2001,10 +2881,12 @@ Your application is now being processed for final approval. I'll update you shor
             "current_message": user_message,
             "user_profile": restored_user_profile,
             "loan_request": restored_loan_request,
+            "pending_loan_request": restored_pending_loan,
             "financial_data": restored_financial_data,
             "negotiation_state": restored_negotiation,
             "document_state": restored_document,
             "trust_analysis": restored_trust,
+            "otp_state": restored_otp,
             "decision": {},
             "next_step": "",
             "ai_response": "",
@@ -2100,10 +2982,12 @@ Your application is now being processed for final approval. I'll update you shor
             # Preserve state for next call (nested format)
             "user_profile": user_profile,
             "loan_request": final_state.get("loan_request", {}),
+            "pending_loan_request": final_state.get("pending_loan_request", {}),
             "financial_data": financial_data,
             "negotiation_state": final_state.get("negotiation_state", {}),
             "document_state": final_state.get("document_state", {}),
-            "trust_analysis": trust_analysis
+            "trust_analysis": trust_analysis,
+            "otp_state": final_state.get("otp_state", {})
         }
 
 

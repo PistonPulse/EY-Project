@@ -28,6 +28,7 @@ import tempfile
 from graph_agent import create_agent, LoanAgentGraph, GeminiLLM, validate_salary_math, cross_check_bank_statement, check_visual_forgery
 from mock_data import MockDataProvider
 from pdf_generator import generate_sanction_letter, cleanup_pdf_file
+from external_services import external_api_router
 
 # Fuzzy matching for name verification
 try:
@@ -94,6 +95,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount External Services API Router (Mock microservices)
+app.include_router(external_api_router)
+print("🔌 External Services API mounted at /external-api/*")
 
 
 # ==================== PYDANTIC MODELS ====================
@@ -258,10 +263,13 @@ async def chat_endpoint(request: ChatRequest):
             # New nested state format
             "user_profile": result.get("user_profile", {}),
             "loan_request": result.get("loan_request", {}),
+            "pending_loan_request": result.get("pending_loan_request", {}),
             "financial_data": result.get("financial_data", {}),
             "negotiation_state": result.get("negotiation_state", {}),
             "document_state": result.get("document_state", {}),
-            "trust_analysis": result.get("trust_analysis", {})
+            "trust_analysis": result.get("trust_analysis", {}),
+            # OTP state for verification
+            "otp_state": result.get("otp_state", {})
         }
         
         print(f"\n🔄 SESSION UPDATED:")
@@ -291,6 +299,19 @@ async def chat_endpoint(request: ChatRequest):
             last_active_agent = None
             
             for log in result["admin_log"]:
+                # Check if this is an API event (special handling for microservices visibility)
+                api_event = log.get("api_event")
+                if api_event:
+                    # Broadcast as API event type directly for special UI treatment
+                    await broadcast_to_admin({
+                        "type": api_event["type"],  # e.g., "API_CALL_CRM", "API_RESPONSE_CRM"
+                        "data": api_event["data"],
+                        "timestamp": api_event["timestamp"]
+                    })
+                    print(f"  🌐 Broadcasting API Event: {api_event['type']}")
+                    await asyncio.sleep(0.3)  # Longer delay for visual effect on API calls
+                    continue
+                
                 # Map graph agent log types to UI levels
                 level = log.get("type", "info")
                 # Ensure level matches what frontend expects
@@ -358,16 +379,22 @@ async def chat_endpoint(request: ChatRequest):
             print(f"⚠️ No admin_log found in result!")
 
         # 3. Risk Score Update - ALWAYS SEND (critical for dashboard updates)
-        trust_score = result.get("trust_score", 50)  # Default to 50 if not set
+        # Get trust_score from trust_analysis if available
+        trust_analysis = result.get("trust_analysis", {})
+        trust_score = trust_analysis.get("trust_score") or result.get("trust_score", 50)
+        fraud_flags = trust_analysis.get("fraud_flags", []) or result.get("fraud_flags", [])
+        risk_category = trust_analysis.get("risk_category", "MEDIUM")
+        
         await broadcast_to_admin({
             "type": "risk_calculated",
             "data": {
                 "risk_score": trust_score,
-                "factors": result.get("fraud_flags", [])
+                "risk_category": risk_category,
+                "factors": fraud_flags
             },
             "timestamp": timestamp
         })
-        print(f"📊 Broadcasting Trust Score: {trust_score}")
+        print(f"📊 Broadcasting Trust Score: {trust_score} | Risk: {risk_category} | Flags: {len(fraud_flags)}")
 
         # 4. Customer Identification & Profile Update
         customer_profile = result.get("customer_profile") or {}
@@ -522,16 +549,27 @@ async def upload_document_vision(
         # PHASE 5: Use Gemini Vision to analyze document
         if agent:
             try:
-                # Create GeminiLLM instance
-                gemini = GeminiLLM()
+                # Create GeminiLLM instance with API key
+                gemini = GeminiLLM(GEMINI_API_KEY)
                 
                 # Send to Gemini Vision (base64 encode the file)
                 import base64
                 file_data = base64.b64encode(contents).decode('utf-8')
-                file_mime = file.content_type or 'image/jpeg'
+                
+                # Set correct mime type based on file extension
+                filename_lower = file.filename.lower()
+                if filename_lower.endswith('.pdf'):
+                    file_mime = 'application/pdf'
+                elif filename_lower.endswith('.png'):
+                    file_mime = 'image/png'
+                elif filename_lower.endswith('.jpg') or filename_lower.endswith('.jpeg'):
+                    file_mime = 'image/jpeg'
+                else:
+                    file_mime = file.content_type or 'image/jpeg'
+                
+                print(f"📄 File MIME type: {file_mime}")
                 
                 # Determine document type from filename
-                filename_lower = file.filename.lower()
                 if 'salary' in filename_lower or 'slip' in filename_lower or 'payslip' in filename_lower:
                     doc_type_hint = 'Salary Slip'
                 elif 'pan' in filename_lower:
@@ -674,16 +712,45 @@ Return ONLY valid JSON."""
                     print(f"📄 Gemini Vision extracted: {extracted_data}")
                 except Exception as vision_error:
                     print(f"⚠️ Vision API error, using fallback: {vision_error}")
-                    # Fallback mock data for demo
-                    extracted_data = {
-                        "doc_type": doc_type_hint,
-                        "net_salary": 95000 if doc_type_hint == 'Salary Slip' else None,
-                        "employee_name": session.get("state", {}).get("user_profile", {}).get("name"),
-                        "employer_name": "Verified Company",
-                        "pan_number": "ABCDE1234F" if doc_type_hint == 'PAN Card' else None,
-                        "full_name": session.get("state", {}).get("user_profile", {}).get("name"),
-                        "confidence": 75
-                    }
+                    # Fallback mock data for demo - with proper salary components
+                    user_name = session.get("state", {}).get("user_profile", {}).get("name", "Employee")
+                    if doc_type_hint == 'Salary Slip':
+                        extracted_data = {
+                            "doc_type": "Salary Slip",
+                            "employee_name": user_name,
+                            "employer_name": "Tech Mahindra Ltd",
+                            "month": "November 2025",
+                            "earnings": {
+                                "basic_pay": 50000,
+                                "hra": 20000,
+                                "special_allowances": 35000,
+                                "other_earnings": 0
+                            },
+                            "deductions": {
+                                "pf_deduction": 6000,
+                                "tax_deduction": 4000,
+                                "professional_tax": 200,
+                                "other_deductions": 0
+                            },
+                            "gross_salary": 105000,
+                            "total_deductions": 10200,
+                            "net_salary": 94800,
+                            "visual_analysis": {
+                                "font_consistency": True,
+                                "alignment_quality": True,
+                                "image_quality": "good",
+                                "signs_of_editing": False,
+                                "suspicion_score": 5
+                            },
+                            "confidence": 85
+                        }
+                    else:
+                        extracted_data = {
+                            "doc_type": doc_type_hint,
+                            "full_name": user_name,
+                            "pan_number": "ABCDE1234F" if doc_type_hint == 'PAN Card' else None,
+                            "confidence": 75
+                        }
                 
                 # Get user profile from session
                 user_profile = session.get("state", {}).get("user_profile", {})
@@ -700,6 +767,10 @@ Return ONLY valid JSON."""
                 if "document_state" not in session["state"]:
                     session["state"]["document_state"] = {}
                 
+                # Ensure financial_data exists in session state
+                if "financial_data" not in session["state"]:
+                    session["state"]["financial_data"] = {}
+                
                 # ---- SALARY VERIFICATION (Strict 90% Rule) ----
                 if extracted_data.get("net_salary"):
                     proven_salary = extracted_data["net_salary"]
@@ -709,7 +780,7 @@ Return ONLY valid JSON."""
                         # STRICT RULE: If proven_salary < 90% of claimed_salary → Discrepancy
                         if proven_salary < (0.9 * expected_salary):
                             discrepancy_flags.append("SALARY_DISCREPANCY")
-                            verification_message = f"⚠️ **Salary Discrepancy Detected**\n\nThe document shows a salary of **₹{proven_salary:,}**, which is lower than the ₹{expected_salary:,} you mentioned.\n\n**I must use the documented amount (₹{proven_salary:,}) for underwriting.**"
+                            verification_message = f"**Salary Discrepancy Detected**\n\nThe document shows a salary of **Rs. {proven_salary:,}**, which is lower than the Rs. {expected_salary:,} you mentioned.\n\n**I must use the documented amount (Rs. {proven_salary:,}) for underwriting.**"
                             
                             # Update financial data with PROVEN salary
                             session["state"]["financial_data"]["monthly_income"] = proven_salary
@@ -729,7 +800,7 @@ Return ONLY valid JSON."""
                             docs_verified = True  # Document is valid, just lower than claimed
                         elif proven_salary >= (0.9 * expected_salary):
                             docs_verified = True
-                            verification_message = f"✅ **Salary Verified:** ₹{proven_salary:,} matches your profile!"
+                            verification_message = f"**Salary Verified:** Rs. {proven_salary:,} matches your profile!"
                             session["state"]["financial_data"]["monthly_income"] = proven_salary
                             session["state"]["financial_data"]["salary_source"] = "DOCUMENT_VERIFIED"
                     else:
@@ -737,7 +808,7 @@ Return ONLY valid JSON."""
                         docs_verified = True
                         session["state"]["financial_data"]["monthly_income"] = proven_salary
                         session["state"]["financial_data"]["salary_source"] = "DOCUMENT_VERIFIED"
-                        verification_message = f"✅ **Salary Extracted:** ₹{proven_salary:,}/month"
+                        verification_message = f"**Salary Extracted:** Rs. {proven_salary:,}/month"
                 
                 # ---- NAME/IDENTITY VERIFICATION (Fuzzy Match 80% Rule) ----
                 document_name = extracted_data.get("employee_name") or extracted_data.get("full_name")
@@ -752,22 +823,22 @@ Return ONLY valid JSON."""
                         if name_similarity < 80:
                             discrepancy_flags.append("NAME_MISMATCH")
                             docs_verified = False
-                            verification_message += f"\n\n❌ **Identity Mismatch Detected**\n\nThe document shows the name **'{document_name}'**, but you registered as **'{claimed_name}'** (Match: {name_similarity}%).\n\n**This document cannot be accepted.** Please upload a document with your registered name."
+                            verification_message += f"\n\n**Identity Mismatch Detected**\n\nThe document shows the name **'{document_name}'**, but you registered as **'{claimed_name}'** (Match: {name_similarity}%).\n\n**This document cannot be accepted.** Please upload a document with your registered name."
                         else:
-                            verification_message += f"\n\n✅ **Name Verified:** {document_name} (Match: {name_similarity}%)"
+                            verification_message += f"\n\n**Name Verified:** {document_name} (Match: {name_similarity}%)"
                     else:
                         # Simple comparison fallback
                         if claimed_name.lower().strip() in document_name.lower() or document_name.lower() in claimed_name.lower().strip():
-                            verification_message += f"\n\n✅ **Name Verified:** {document_name}"
+                            verification_message += f"\n\n**Name Verified:** {document_name}"
                         else:
                             discrepancy_flags.append("NAME_MISMATCH")
                             docs_verified = False
-                            verification_message += f"\n\n❌ **Identity Mismatch:** Document shows '{document_name}', expected '{claimed_name}'"
+                            verification_message += f"\n\n**Identity Mismatch:** Document shows '{document_name}', expected '{claimed_name}'"
                 
                 # ---- PAN VERIFICATION ----
                 if extracted_data.get("pan_number"):
                     session["state"]["document_state"]["verified_pan"] = extracted_data["pan_number"]
-                    verification_message += f"\n\n✅ **PAN Verified:** {extracted_data['pan_number']}"
+                    verification_message += f"\n\n**PAN Verified:** {extracted_data['pan_number']}"
                 
                 # Store discrepancy flags
                 session["state"]["document_state"]["discrepancy_flags"] = discrepancy_flags
@@ -830,18 +901,18 @@ Return ONLY valid JSON."""
                 
                 # If fraud detected, return polite rejection
                 if fraud_detected:
-                    print(f"🚨 FRAUD DETECTED: {risk_control_results['fraud_reasons']}")
+                    print(f"FRAUD DETECTED: {risk_control_results['fraud_reasons']}")
                     
-                    fraud_message = f"""⚠️ **Document Verification Issue**
+                    fraud_message = f"""**Document Verification Issue**
 
 I'm having trouble verifying the authenticity of your uploaded document. This could happen due to:
-• Image quality or resolution issues
-• Document not being an original copy
-• Internal formatting inconsistencies
+- Image quality or resolution issues
+- Document not being an original copy
+- Internal formatting inconsistencies
 
 **What you can do:**
-📄 Please upload the **original PDF** downloaded directly from your payroll portal or bank's website.
-📸 If uploading photos, ensure they're clear, uncropped, and include the full document.
+- Please upload the **original PDF** downloaded directly from your payroll portal or bank's website.
+- If uploading photos, ensure they're clear, uncropped, and include the full document.
 
 **Need help?** Our team can assist you at **1800-XXX-XXXX** (Toll-free).
 
