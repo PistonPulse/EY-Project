@@ -1,165 +1,210 @@
 """
-TataSmartAgent - FastAPI Main Application
-Production-grade backend for Agentic AI Loan Officer
+TataSmartAgent - FastAPI Main Application (CLEAN VERSION)
+
+================================================================================
+HARD RESET: DETERMINISTIC 13-STAGE FLOW
+================================================================================
+
+This is the CLEAN implementation with all legacy code removed.
+
+FEATURES:
+- Strict 16-stage linear flow (no skipping)
+- No file upload (income from database only)
+- EMI calculated AFTER tenure selection
+- Interest rate as RANGE (10.5%-18%)
+- Backend controls ALL decisions
+- Admin dashboard shows exact backend state
+- LLM NEVER hallucinates (backend controls logic)
+
+STAGES:
+1. GREETING → 2. PURPOSE → 3. AMOUNT → 4. CITY → 5. EMPLOYMENT_TYPE →
+6. NAME → 7. MOBILE → 8. OTP → 9. KYC → 10. OFFER_DISCUSSION →
+11. TENURE_SELECTION → 12. UNDERWRITING → 13. SANCTION/REJECTION
+
+================================================================================
 """
 
 import os
-import asyncio
 import json
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
+import asyncio
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 
-# PHASE 6: PDF Generation imports
+# PDF Generation
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
-from reportlab.lib.colors import HexColor, blue, black
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 import tempfile
 
-from graph_agent import create_agent, LoanAgentGraph, GeminiLLM, validate_salary_math, cross_check_bank_statement, check_visual_forgery
-from mock_data import MockDataProvider
-from pdf_generator import generate_sanction_letter, cleanup_pdf_file
-from external_services import external_api_router
-
-# Fuzzy matching for name verification
+# Gemini AI Integration
 try:
-    from thefuzz import fuzz
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
 except ImportError:
-    # Fallback - install with: pip install thefuzz
-    fuzz = None
-    print("⚠️ thefuzz not installed - fuzzy matching disabled")
+    GEMINI_AVAILABLE = False
+    print("⚠️ google-generativeai not installed. Using hardcoded responses only.")
 
-# ==================== CONFIGURATION ====================
-# Load environment variables from .env file
+# HARD RESET: Deterministic Flow Controller (ONLY source of truth)
+from deterministic_flow import (
+    get_flow_controller,
+    process_message as deterministic_process_message,
+    get_session_state as deterministic_get_session_state,
+    get_admin_state,
+    get_all_admin_sessions,
+    reset_session as deterministic_reset_session,
+    FlowStage,
+    TERMINAL_STAGES,
+)
+
+from mock_data import MockDataProvider
+from pdf_generator import generate_sanction_letter
+
+# Load environment variables
 load_dotenv()
 
+# ==================== GEMINI AI CONFIGURATION ====================
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-if not GEMINI_API_KEY:
-    print("⚠️  WARNING: GEMINI_API_KEY not set. Set it in environment variables.")
-else:
-    print(f"✅ GEMINI_API_KEY loaded: {GEMINI_API_KEY[:20]}...")
+USE_GEMINI = os.getenv("USE_GEMINI", "false").lower() == "true"  # Disabled - using hardcoded responses
 
-# Global agent instance
-agent: Optional[LoanAgentGraph] = None
+# Initialize Gemini model
+gemini_model = None
+if GEMINI_AVAILABLE and GEMINI_API_KEY and USE_GEMINI:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel('gemini-2.0-flash')
+        print(f"✅ Gemini AI initialized (model: gemini-2.0-flash)")
+        print(f"   API Key: {GEMINI_API_KEY[:20]}...")
+    except Exception as e:
+        print(f"⚠️ Gemini initialization failed: {e}")
+        gemini_model = None
+else:
+    if not GEMINI_API_KEY:
+        print("⚠️ GEMINI_API_KEY not set. Using hardcoded responses.")
+    elif not USE_GEMINI:
+        print("ℹ️ Gemini disabled via USE_GEMINI=false. Using hardcoded responses.")
+
+
+# ==================== INDIAN CURRENCY FORMATTING ====================
+def format_indian_currency(amount) -> str:
+    """
+    Format number in Indian currency style (lakhs/crores).
+    
+    Examples:
+    - 500000 → 5,00,000
+    - 1500000 → 15,00,000
+    - 50000 → 50,000
+    - 12345678 → 1,23,45,678
+    
+    Indian number system:
+    - First comma after 3 digits from right
+    - Then commas every 2 digits
+    """
+    amount = int(round(float(amount)))
+    s = str(amount)
+    
+    if len(s) <= 3:
+        return s
+    
+    # Split: last 3 digits + rest
+    last_three = s[-3:]
+    rest = s[:-3]
+    
+    # Add commas every 2 digits to the rest
+    parts = []
+    while len(rest) > 2:
+        parts.insert(0, rest[-2:])
+        rest = rest[:-2]
+    if rest:
+        parts.insert(0, rest)
+    
+    return ','.join(parts) + ',' + last_three
+
 
 # Active WebSocket connections for admin dashboard
 admin_connections: List[WebSocket] = []
 
-# Session storage (in production, use Redis or database)
+# Session storage (in production, use Redis/database)
 sessions: Dict[str, Dict[str, Any]] = {}
 
 
-
-# ==================== LIFESPAN MANAGEMENT ====================
+# ==================== LIFESPAN ====================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown events"""
-    global agent
+    """Startup and shutdown"""
+    print("""
+============================================================
+🏦 TATA CAPITAL - DETERMINISTIC LOAN CHATBOT (V4)
+============================================================
+📍 Flow: 16-stage strict linear sequence
+🔒 Backend controls ALL logic
+📊 Admin dashboard shows exact state
+💳 Dynamic Credit Scoring from user inputs
+💵 EMI calculated AFTER tenure selection
+🤖 Gemini AI for natural responses
+============================================================
+    """)
     
-    # Startup
-    print("🚀 Initializing TataSmartAgent...")
-    if GEMINI_API_KEY:
-        agent = await create_agent(GEMINI_API_KEY)
-        print("✅ Agent initialized successfully")
-    else:
-        print("❌ Agent initialization failed - missing API key")
+    # Initialize the deterministic flow controller
+    controller = get_flow_controller()
+    print("✅ Deterministic Flow Controller initialized")
+    print(f"   - 16 stages enforced")
+    print(f"   - Dynamic credit scoring enabled")
+    print(f"   - State persistence enabled")
     
     yield
     
-    # Shutdown
-    print("🛑 Shutting down TataSmartAgent...")
+    print("🛑 Shutting down...")
 
 
 # ==================== FASTAPI APP ====================
 app = FastAPI(
     title="TataSmartAgent",
-    description="Production-grade Agentic AI Loan Officer using LangGraph & Google Gemini",
-    version="1.0.0",
+    description="Deterministic 16-Stage Loan Chatbot with Dynamic Credit Scoring",
+    version="4.0.0",
     lifespan=lifespan
 )
 
-# CORS Middleware
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount External Services API Router (Mock microservices)
-app.include_router(external_api_router)
-print("🔌 External Services API mounted at /external-api/*")
-
 
 # ==================== PYDANTIC MODELS ====================
 class ChatRequest(BaseModel):
-    """Request model for chat endpoint"""
+    """Request model for chat"""
     message: str = Field(..., description="User's message")
-    session_id: Optional[str] = Field(None, description="Unique session identifier")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional typing metadata for trust analysis")
+    session_id: Optional[str] = Field(None, description="Session ID")
 
 
 class ChatResponse(BaseModel):
-    """Response model for chat endpoint"""
-    response: str = Field(..., description="AI agent's response")
+    """Response model for chat"""
+    response: str
     session_id: str
     conversation_stage: str
     missing_info: List[str] = Field(default_factory=list)
     decision: Optional[str] = None
-    show_upload: bool = False  # NEW: Show upload button in UI
-    show_sanction_letter: bool = False  # NEW: Show download button in UI
-    loan_details: Optional[Dict[str, Any]] = None  # NEW: Loan details for sanction letter
-    customer_name: Optional[str] = None  # NEW: Customer name for letter
-    admin_data: Optional[Dict[str, Any]] = None  # For debugging
+    show_upload: bool = False  # Always False (no uploads)
+    show_sanction_letter: bool = False
+    loan_details: Optional[Dict[str, Any]] = None
+    customer_name: Optional[str] = None
+    admin_data: Optional[Dict[str, Any]] = None
+    session_closed: bool = False
+    closure_reason: Optional[str] = None
 
 
-class UploadResponse(BaseModel):
-    """Response model for document upload"""
-    success: bool
-    message: str
-    response: Optional[str] = None  # AI response message
-    session_id: Optional[str] = None
-    document_verified: Optional[bool] = None  # Whether document passed verification
-    extracted_data: Optional[Dict[str, Any]] = None
-    trust_score: Optional[int] = None
-    fraud_detected: Optional[bool] = None  # Whether fraud was detected
-    risk_control: Optional[Dict[str, Any]] = None  # Fraud detection results
-
-
-class SessionInfoResponse(BaseModel):
-    """Response model for session information"""
-    session_id: str
-    conversation_history: List[Dict[str, Any]]
-    current_state: Dict[str, Any]
-
-
-# ==================== HELPER FUNCTIONS ====================
-def get_or_create_session(session_id: str) -> Dict[str, Any]:
-    """Get existing session or create new one"""
-    if session_id not in sessions:
-        sessions[session_id] = {
-            "session_id": session_id,
-            "created_at": datetime.now().isoformat(),
-            "messages": [],
-            "state": {},
-            "last_activity": datetime.now().isoformat()
-        }
-    else:
-        sessions[session_id]["last_activity"] = datetime.now().isoformat()
-    
-    return sessions[session_id]
-
-
+# ==================== HELPERS ====================
 async def broadcast_to_admin(data: Dict[str, Any]):
     """Send data to all connected admin dashboards"""
     if not admin_connections:
@@ -174,20 +219,394 @@ async def broadcast_to_admin(data: Dict[str, Any]):
         except Exception:
             disconnected.append(connection)
     
-    # Remove disconnected clients
     for conn in disconnected:
-        admin_connections.remove(conn)
+        if conn in admin_connections:
+            admin_connections.remove(conn)
 
+
+# ==================== GEMINI AI RESPONSE GENERATION ====================
+
+# Stage-specific prompts for Gemini
+STAGE_PROMPTS = {
+    "GREETING": """You are a friendly loan assistant at Tata Capital. 
+    Generate a warm, welcoming greeting for a new customer. 
+    Mention that you help with personal loans. Ask if they're looking for a loan today.
+    Use 1-2 emojis. Keep it 2-3 sentences max.""",
+    
+    "PURPOSE": """The customer wants a loan. Ask them what they need the loan for.
+    Mention some common purposes: home renovation, education, medical expenses, wedding, travel.
+    Be warm and helpful. Use 1-2 emojis. Keep it 2-3 sentences.""",
+    
+    "AMOUNT": """The customer told us their loan purpose is: {loan_purpose}
+    Now ask how much they want to borrow.
+    Give an example format (e.g., "5 lakhs" or "500000").
+    Be encouraging. Use 1-2 emojis. Keep it 2-3 sentences.""",
+    
+    "CITY": """The customer wants to borrow ₹{loan_amount_formatted}.
+    Acknowledge the amount positively and ask which city they live in.
+    Mention it helps check branch availability.
+    Use 1-2 emojis. Keep it 2-3 sentences.""",
+    
+    "EMPLOYMENT_TYPE": """The customer lives in {city}.
+    Acknowledge the city positively and ask if they are salaried or self-employed.
+    Mention this helps find the best rates.
+    Use 1-2 emojis. Keep it 2-3 sentences.""",
+    
+    "NAME": """Now ask for the customer's full name as it appears on their PAN card.
+    Mention this is important for verification.
+    Be professional but friendly. Use 1 emoji. Keep it 2 sentences.""",
+    
+    "MOBILE": """The customer's name is {user_name}.
+    Thank them and ask for their 10-digit mobile number.
+    Mention we'll send an OTP for verification.
+    Use 1-2 emojis. Keep it 2-3 sentences.""",
+    
+    "OTP": """We've sent an OTP to the customer's mobile.
+    Ask them to enter the 6-digit verification code.
+    Mention it should arrive within seconds.
+    Use 1 emoji. Keep it 2 sentences.""",
+    
+    "INCOME": """The customer's mobile is now verified! 📱✅
+    Now we need to understand their financial profile.
+    Ask for their monthly income (salary or business income).
+    Give examples like "50,000" or "50k" or "5 lakhs per year".
+    Mention this helps us calculate the best loan offer.
+    Use 1-2 emojis. Keep it 2-3 sentences.""",
+    
+    "EXISTING_EMI": """The customer earns ₹{monthly_income_formatted} per month.
+    Now ask if they have any existing loans or EMIs they're paying.
+    If yes, ask for the total monthly EMI amount.
+    If no existing loans, they can say "0" or "none".
+    This helps us understand their repayment capacity.
+    Use 1-2 emojis. Keep it 2-3 sentences.""",
+    
+    "DOB": """We're building their financial profile!
+    Now ask for their age or date of birth.
+    They can provide just their age (e.g., "32") or full DOB (e.g., "15/06/1992").
+    Mention age is required for loan eligibility criteria.
+    Use 1 emoji. Keep it 2-3 sentences.""",
+    
+    "KYC": """The customer's financial profile is captured.
+    Now ask for their 10-character PAN number (format: ABCDE1234F).
+    Mention it's for identity verification and final eligibility check.
+    Use 1 emoji. Keep it 2-3 sentences.""",
+    
+    "OFFER_DISCUSSION": """Great news! Based on the customer's profile:
+    - Monthly Income: ₹{monthly_income_formatted}
+    - Credit Score: {credit_score} (calculated from financial profile)
+    - Pre-approved Limit: ₹{pre_approved_limit_formatted}
+    - Interest Rate: {interest_min}% - {interest_max}% per annum
+    
+    Share this exciting news enthusiastically!
+    DO NOT mention the exact credit score number to the customer.
+    Ask if they want to proceed with the loan.
+    Use 2-3 emojis to celebrate. Keep it 4-5 sentences.""",
+    
+    "TENURE_SELECTION": """The customer accepted the offer. Now present EMI options:
+    {emi_options_text}
+    Ask them to choose their preferred tenure (12, 24, 36, or 48 months).
+    Be helpful and clear. Use 1-2 emojis. Keep it concise.""",
+    
+    "UNDERWRITING": """The customer's application is being processed by our underwriting team.
+    Let them know to hang tight and that it usually takes just a moment.
+    Be reassuring. Use 1 emoji. Keep it 2 sentences.""",
+    
+    "SANCTION": """CONGRATULATIONS! The loan is APPROVED!
+    Customer: {user_name}
+    Loan Amount: ₹{loan_amount_formatted}
+    Interest Rate: {interest_rate}% per annum
+    Tenure: {tenure} months
+    Monthly EMI: ₹{emi_formatted}
+    
+    Share this wonderful news with lots of enthusiasm!
+    Mention the sanction letter is ready for download.
+    Welcome them to Tata Capital family.
+    Use 3-4 celebration emojis. Keep it 5-6 sentences.""",
+    
+    "REJECTION": """Unfortunately, we couldn't approve the loan for {user_name}.
+    Express genuine empathy and apologize.
+    Mention they can reapply after 6 months.
+    Provide helpline number: 1800-XXX-XXXX.
+    Be compassionate. Use 1 emoji (sad). Keep it 3-4 sentences."""
+}
+
+
+async def generate_gemini_response(stage: str, session_data: dict) -> Optional[str]:
+    """
+    Generate a dynamic response using Google Gemini AI.
+    
+    This function:
+    1. Gets the stage-specific prompt template
+    2. Fills in context data (names, amounts, etc.)
+    3. Sends to Gemini for natural language generation
+    4. Returns the AI-generated response
+    
+    Falls back to None if Gemini fails (hardcoded backup will be used).
+    """
+    global gemini_model
+    
+    if not gemini_model:
+        return None
+    
+    try:
+        # Get prompt template for this stage
+        prompt_template = STAGE_PROMPTS.get(stage)
+        if not prompt_template:
+            return None
+        
+        # Build context for prompt
+        context = {
+            "user_name": session_data.get("user_name", ""),
+            "loan_purpose": (session_data.get("loan_purpose") or "personal").replace('_', ' ').title(),
+            "loan_amount": session_data.get("loan_amount") or 0,
+            "loan_amount_formatted": format_indian_currency(session_data.get("loan_amount") or 0),
+            "city": session_data.get("city") or "",
+            "employment_type": session_data.get("employment_type") or "",
+            "pre_approved_limit": session_data.get("pre_approved_limit") or 0,
+            "pre_approved_limit_formatted": format_indian_currency(session_data.get("pre_approved_limit") or 0),
+            "interest_min": session_data.get("interest_rate_min") or 10.5,
+            "interest_max": session_data.get("interest_rate_max") or 18.0,
+            "interest_rate": session_data.get("final_interest_rate") or 12.0,
+            "tenure": session_data.get("selected_tenure") or 24,
+            "emi": session_data.get("calculated_emi") or 0,
+            "emi_formatted": format_indian_currency(session_data.get("calculated_emi") or 0),
+        }
+        
+        # Build EMI options text for tenure selection
+        emi_options = session_data.get("emi_options") or {}
+        emi_text_parts = []
+        for months in [12, 24, 36, 48]:
+            option = emi_options.get(months, {})
+            emi = option.get("emi", 0) if isinstance(option, dict) else 0
+            if emi and emi > 0:
+                emi_text_parts.append(f"{months} months: ₹{format_indian_currency(emi)}/month")
+        context["emi_options_text"] = "\n".join(emi_text_parts) if emi_text_parts else "Multiple tenure options available"
+        
+        # Fill in the prompt template
+        try:
+            prompt = prompt_template.format(**context)
+        except KeyError:
+            # If any key is missing, use template as-is
+            prompt = prompt_template
+        
+        # System instruction for consistent tone
+        system_instruction = """You are a professional loan assistant at Tata Capital, India's leading NBFC.
+        Your tone is: warm, helpful, professional, and slightly enthusiastic.
+        You speak like a friendly bank officer who genuinely wants to help.
+        Always use proper Indian English (e.g., "lakhs" not "lacs", "₹" for rupees).
+        Never make up information - only use what's provided.
+        Keep responses concise but warm."""
+        
+        # Generate response
+        response = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: gemini_model.generate_content(
+                f"{system_instruction}\n\n{prompt}",
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.7,
+                    max_output_tokens=300,
+                )
+            )
+        )
+        
+        if response and response.text:
+            print(f"✨ Gemini generated response for stage: {stage}")
+            return response.text.strip()
+        
+        return None
+        
+    except Exception as e:
+        print(f"⚠️ Gemini generation failed for {stage}: {e}")
+        return None
+
+
+def generate_deterministic_response_hardcoded(stage: str, session_data: dict) -> str:
+    """
+    Generate bot response based on CURRENT STAGE.
+    
+    Uses LAZY EVALUATION to avoid format errors when values are None.
+    Tone: Professional yet warm and personal - like a helpful bank officer.
+    """
+    user_name = session_data.get("user_name", "")
+    name_part = f", {user_name}" if user_name else ""
+    
+    # Safe defaults
+    loan_purpose = session_data.get("loan_purpose") or "personal"
+    loan_amount = session_data.get("loan_amount") or 0
+    city = session_data.get("city") or ""
+    employment = session_data.get("employment_type") or ""
+    
+    if stage == "GREETING":
+        return "Hi there! 👋 Welcome to Tata Capital.\n\nI'm here to help you get a personal loan quickly and hassle-free. Are you looking for a loan today?"
+    
+    elif stage == "PURPOSE":
+        return "Wonderful! 😊 I'd love to help you out.\n\nCould you tell me what you need the loan for? It could be home renovation, education, medical expenses, a wedding, travel, or anything else!"
+    
+    elif stage == "AMOUNT":
+        purpose_display = loan_purpose.replace('_', ' ').title()
+        return f"Perfect choice - {purpose_display}! 👍\n\nHow much are you looking to borrow? Just give me an amount (e.g., 5 lakhs or 500000)."
+    
+    elif stage == "CITY":
+        if loan_amount and loan_amount > 0:
+            return f"Got it! ₹{format_indian_currency(loan_amount)} - I've noted that down ✅\n\nWhich city do you currently reside in? This helps us check branch availability near you."
+        return "Which city do you currently live in?"
+    
+    elif stage == "EMPLOYMENT_TYPE":
+        return f"Great, {city} is well-covered! 📍\n\nOne quick question - are you salaried or self-employed? This helps us find the best rates for you."
+    
+    elif stage == "NAME":
+        return "Excellent! Now, may I have your full name exactly as it appears on your PAN card? This is important for verification. 📝"
+    
+    elif stage == "MOBILE":
+        return f"Thank you{name_part}! 😊\n\nPlease share your 10-digit mobile number. We'll send a quick OTP to verify - takes just a few seconds!"
+    
+    elif stage == "OTP":
+        return "📱 OTP sent to your mobile!\n\nPlease check your messages and enter the 6-digit verification code. It should arrive within a few seconds."
+    
+    elif stage == "INCOME":
+        return f"Wonderful! Your mobile number is verified ✅\n\nNow, let's understand your financial profile. What is your monthly income (take-home salary or business income)?\n\nYou can type it as \"50000\" or \"50k\" or \"5 lakhs per year\" 💰"
+    
+    elif stage == "EXISTING_EMI":
+        monthly_income = session_data.get("monthly_income") or 0
+        return f"Got it! ₹{format_indian_currency(monthly_income)} per month ✅\n\nDo you have any existing loans or EMIs you're currently paying? If yes, please tell me the total monthly EMI amount.\n\nIf you don't have any existing loans, just type \"0\" or \"none\" 📊"
+    
+    elif stage == "DOB":
+        return "Almost there! 🎂\n\nWhat is your age? You can simply type your age (e.g., \"32\") or your date of birth (e.g., \"15/06/1992\").\n\nThis helps us verify eligibility criteria."
+    
+    elif stage == "KYC":
+        return f"Wonderful! Your financial profile is complete ✅\n\nNow I need your PAN number for identity verification. Please enter your 10-character PAN (e.g., ABCDE1234F)."
+    
+    elif stage == "OFFER_DISCUSSION":
+        return _generate_offer_response(session_data)
+    
+    elif stage == "TENURE_SELECTION":
+        return _generate_tenure_response(session_data)
+    
+    elif stage == "UNDERWRITING":
+        return f"Your application is being processed... ⏳\n\nOur underwriting team is reviewing your profile. This usually takes just a moment - hang tight!"
+
+    elif stage == "SANCTION":
+        return _generate_sanction_response(session_data)
+    
+    elif stage == "REJECTION":
+        return f"I'm really sorry{name_part} 😔\n\nUnfortunately, we couldn't approve your loan application at this time based on our eligibility criteria.\n\nYou're welcome to reapply after 6 months. If you have questions, please call us at 1800-XXX-XXXX - we're here to help!"
+    else:
+        return "Processing..."
+
+
+def _generate_offer_response(session_data: dict) -> str:
+    """Generate OFFER stage response with interest RANGE and credit assessment."""
+    user_name = session_data.get("user_name", "")
+    name_part = f", {user_name}" if user_name else ""
+    
+    pre_approved = session_data.get("pre_approved_limit") or 0
+    interest_min = session_data.get("interest_rate_min") or 10.5
+    interest_max = session_data.get("interest_rate_max") or 18.0
+    credit_score = session_data.get("credit_score") or 0
+    monthly_income = session_data.get("monthly_income") or 0
+    
+    # Determine credit rating description (never show actual score)
+    if credit_score >= 800:
+        credit_status = "Excellent credit profile! 🌟"
+    elif credit_score >= 750:
+        credit_status = "Very good credit profile! ✨"
+    elif credit_score >= 700:
+        credit_status = "Good credit profile! 👍"
+    else:
+        credit_status = "Your profile has been assessed."
+    
+    return f"""🎉 Fantastic news{name_part}!
+
+Based on your financial profile:
+📊 Monthly Income: ₹{format_indian_currency(monthly_income)}
+✅ {credit_status}
+
+You're pre-approved for up to ₹{format_indian_currency(pre_approved)}! 🎊
+
+📈 Interest Rate Range: {interest_min}% - {interest_max}% per annum
+(Final rate will be determined based on your complete profile)
+
+Would you like to proceed with your application? Just say "yes" and we'll move to the next step!"""
+
+
+def _generate_tenure_response(session_data: dict) -> str:
+    """Generate TENURE selection response with EMI options."""
+    emi_options = session_data.get("emi_options") or {}
+    
+    response = "Great! Now let's choose a repayment plan that works for you 📅\n\nHere are your EMI options:\n\n"
+    for months in [12, 24, 36, 48]:
+        option = emi_options.get(months, {}) if emi_options else {}
+        emi = option.get("emi", 0) if isinstance(option, dict) else 0
+        if emi and emi > 0:
+            response += f"📌 {months} months → ₹{format_indian_currency(emi)}/month\n"
+        else:
+            response += f"📌 {months} months\n"
+    
+    response += "\nJust type your preferred tenure (e.g., \"24 months\") and we'll finalize your loan!"
+    
+    return response
+
+
+def _generate_sanction_response(session_data: dict) -> str:
+    """Generate SANCTION response with final loan details."""
+    user_name = session_data.get("user_name", "")
+    name_part = f", {user_name}" if user_name else ""
+    
+    amount = session_data.get("pre_approved_limit") or 0
+    rate = session_data.get("final_interest_rate") or 12.0
+    tenure = session_data.get("selected_tenure") or 24
+    emi = session_data.get("calculated_emi") or 0
+    
+    return f"""🎊🎉 CONGRATULATIONS{name_part}! Your loan is APPROVED! 🎉🎊
+
+Here are your final loan details:
+
+💰 Loan Amount: ₹{format_indian_currency(amount)}
+📈 Interest Rate: {rate}% per annum
+📅 Tenure: {tenure} months
+💳 Monthly EMI: ₹{format_indian_currency(emi)}
+
+Your official sanction letter is ready for download below! 👇
+
+Welcome to the Tata Capital family - we're honored to be part of your journey! 🙏"""
+
+
+async def generate_deterministic_response(stage: str, session_data: dict) -> str:
+    """
+    MAIN RESPONSE GENERATOR - Tries Gemini first, falls back to hardcoded.
+    
+    Strategy:
+    1. If Gemini is available and enabled → Generate dynamic AI response
+    2. If Gemini fails or is disabled → Use hardcoded response (backup)
+    
+    This ensures:
+    - Natural, varied responses when AI is available
+    - Reliable fallback when AI is unavailable
+    - No service interruption regardless of AI status
+    """
+    # Try Gemini first if available
+    if gemini_model and USE_GEMINI:
+        try:
+            gemini_response = await generate_gemini_response(stage, session_data)
+            if gemini_response:
+                return gemini_response
+        except Exception as e:
+            print(f"⚠️ Gemini fallback triggered: {e}")
+    
+    # Fallback to hardcoded response
+    return generate_deterministic_response_hardcoded(stage, session_data)
 
 
 # ==================== MAIN ENDPOINTS ====================
+
 @app.get("/")
 async def root():
-    """Health check endpoint"""
+    """Health check"""
     return {
         "service": "TataSmartAgent",
+        "version": "3.0.0",
         "status": "online",
-        "agent_initialized": agent is not None,
+        "flow": "deterministic_13_stage",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -196,882 +615,305 @@ async def root():
 async def health_check():
     """Detailed health check"""
     return {
-        "status": "healthy" if agent else "degraded",
-        "agent_ready": agent is not None,
-        "active_sessions": len(sessions),
+        "status": "healthy",
+        "flow_controller": "deterministic_v4",
+        "stages": 16,
+        "features": ["dynamic_credit_scoring", "user_provided_income", "gemini_ai"],
         "admin_connections": len(admin_connections),
-        "gemini_api_configured": bool(GEMINI_API_KEY),
+        "gemini_enabled": gemini_model is not None and USE_GEMINI,
+        "gemini_model": "gemini-2.0-flash" if gemini_model else None,
         "timestamp": datetime.now().isoformat()
     }
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
+# ==================== CHAT ENDPOINT (V3) ====================
+
+@app.post("/api/v3/chat", response_model=ChatResponse)
+async def deterministic_chat_endpoint(request: ChatRequest):
     """
-    Main chat endpoint - processes user messages through the LangGraph agent
+    DETERMINISTIC 13-STAGE CHAT ENDPOINT
     
-    This endpoint implements the complete agentic workflow:
-    1. Extracts entities (name, phone, PAN) using Gemini (NO REGEX)
-    2. Verifies customer against mock database  
-    3. Analyzes trust & safety with Gemini reasoning
-    4. Makes underwriting decision with strict Python rules
-    5. Generates natural language response with Gemini (NO TEMPLATES)
+    Flow: GREETING → PURPOSE → AMOUNT → CITY → EMPLOYMENT_TYPE → NAME →
+          MOBILE → OTP → KYC → OFFER_DISCUSSION → TENURE_SELECTION →
+          UNDERWRITING → SANCTION/REJECTION
     
-    All responses are dynamically generated - zero hardcoded text.
+    Rules:
+    - Stage advances ONLY when required data is collected
+    - Out-of-order input is IGNORED
+    - Credit score NEVER exposed
+    - EMI calculated ONLY after tenure selection
     """
-    
-    if not agent:
-        raise HTTPException(status_code=503, detail="Agent not initialized. Check GEMINI_API_KEY.")
-    
     try:
-        # Get or create session
-        session = get_or_create_session(request.session_id)
+        # Process through deterministic flow
+        result = deterministic_process_message(
+            session_id=request.session_id,
+            message=request.message
+        )
         
-        # Process message through the agent graph
-        try:
-            result = await agent.process_message(
-                user_message=request.message,
-                conversation_history=session["messages"],
-                previous_state=session.get("state", {})  # Pass previous state to preserve demo_script
-            )
-        except Exception as agent_error:
-            error_str = str(agent_error)
-            # Check if it's a quota exceeded error
-            if "429" in error_str or "quota" in error_str.lower() or "ResourceExhausted" in error_str:
-                return ChatResponse(
-                    response="I apologize, but we've reached our daily API usage limit. This is a demo using Google's free tier. Please try again later or contact support to upgrade to a paid plan for unlimited access.",
-                    session_id=request.session_id,
-                    conversation_stage="error_quota",
-                    missing_info=[],
-                    decision=None,
-                    admin_data={"error": "quota_exceeded"}
-                )
-            # Re-raise other errors
-            raise agent_error
+        # Get admin state
+        admin_state = get_admin_state(request.session_id)
         
-        # Update session with new state (support both old flat and new nested format)
-        session["messages"] = result.get("messages", [])
-        session["state"] = {
-            # User identification (flat for backward compatibility)
-            "name": result.get("name"),
-            "phone": result.get("phone"),
-            "pan": result.get("pan"),
-            "verified": result.get("customer_verified"),
-            "conversation_stage": result.get("conversation_stage"),
-            "loan_decision": result.get("loan_decision"),
-            "trust_score": result.get("trust_score"),
-            # New nested state format
-            "user_profile": result.get("user_profile", {}),
-            "loan_request": result.get("loan_request", {}),
-            "pending_loan_request": result.get("pending_loan_request", {}),
-            "financial_data": result.get("financial_data", {}),
-            "negotiation_state": result.get("negotiation_state", {}),
-            "document_state": result.get("document_state", {}),
-            "trust_analysis": result.get("trust_analysis", {}),
-            # OTP state for verification
-            "otp_state": result.get("otp_state", {})
-        }
+        # Generate bot response (async - uses Gemini with hardcoded fallback)
+        current_stage = result.get("current_stage", "GREETING")
+        session_data = result.get("session", {})
+        bot_response = await generate_deterministic_response(current_stage, session_data)
         
-        print(f"\n🔄 SESSION UPDATED:")
-        print(f"Session ID: {request.session_id}")
-        print(f"User Name: {result.get('name')}")
-        print(f"Verified: {result.get('customer_verified')}")
-        print(f"Trust Score: {result.get('trust_score')}")
-        print(f"Customer Profile: {result.get('customer_profile')}")
-        print(f"Admin Logs Count: {len(result.get('admin_log', []))}")
-        print(f"Session State: {session['state']}\n")
-        
-        # Broadcast events to admin dashboard
+        # Broadcast to admin dashboard
         timestamp = datetime.now().isoformat()
         
-        # 1. User Message
         await broadcast_to_admin({
             "type": "user_message",
             "data": {"message": request.message},
+            "session_id": request.session_id,
             "timestamp": timestamp
         })
-        
-        # 2. Admin Logs (Step-by-step execution) - CRITICAL FOR AGENT VISUALIZATION
-        if result.get("admin_log") and len(result.get("admin_log", [])) > 0:
-            print(f"📋 Broadcasting {len(result['admin_log'])} admin logs...")
-            
-            # Track last agent to avoid spamming agent_active events
-            last_active_agent = None
-            
-            for log in result["admin_log"]:
-                # Check if this is an API event (special handling for microservices visibility)
-                api_event = log.get("api_event")
-                if api_event:
-                    # Broadcast as API event type directly for special UI treatment
-                    await broadcast_to_admin({
-                        "type": api_event["type"],  # e.g., "API_CALL_CRM", "API_RESPONSE_CRM"
-                        "data": api_event["data"],
-                        "timestamp": api_event["timestamp"]
-                    })
-                    print(f"  🌐 Broadcasting API Event: {api_event['type']}")
-                    await asyncio.sleep(0.3)  # Longer delay for visual effect on API calls
-                    continue
-                
-                # Map graph agent log types to UI levels
-                level = log.get("type", "info")
-                # Ensure level matches what frontend expects
-                if level not in ["info", "success", "warning", "error"]:
-                    level = "info"
-                
-                # Use message from log, or construct one if missing
-                msg = log.get("message")
-                if not msg:
-                    if "action" in log:
-                        msg = f"Action: {log['action']}"
-                    elif "mode" in log:
-                        msg = f"Mode: {log['mode']}"
-                    else:
-                        msg = "Processing..."
-
-                agent_name = log.get("agent", "System")
-                print(f"  🤖 Broadcasting: {agent_name} - {msg}")
-                
-                # Normalize agent name for frontend (extract key identifier)
-                agent_id = agent_name.lower()
-                if "sales" in agent_id:
-                    agent_id = "sales"
-                elif "verification" in agent_id:
-                    agent_id = "verification"
-                elif "underwriting" in agent_id:
-                    agent_id = "underwriting"
-                elif "trust" in agent_id or "safety" in agent_id:
-                    agent_id = "trust"
-                elif "master" in agent_id:
-                    agent_id = "master"
-                else:
-                    # Skip "system" and other generic agents - don't highlight them
-                    if "system" in agent_id:
-                        agent_id = None
-                    else:
-                        agent_id = agent_name.lower().replace(" ", "_").replace("&", "and")
-                
-                # Only broadcast agent_active when agent actually CHANGES (not for every log)
-                # This prevents rapid flashing between agents
-                if agent_id and agent_id != last_active_agent and agent_id != "system":
-                    print(f"    🎯 Agent CHANGED: {last_active_agent} → {agent_id}")
-                    await broadcast_to_admin({
-                        "type": "agent_active",
-                        "data": {
-                            "agent": agent_id
-                        },
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    last_active_agent = agent_id
-                    await asyncio.sleep(0.2)  # Slight delay for visual effect
-                
-                # Broadcast the log message
-                await broadcast_to_admin({
-                    "type": "log",
-                    "data": {
-                        "message": msg,
-                        "level": level,
-                        "agent": agent_name
-                    },
-                    "timestamp": datetime.now().isoformat()
-                })
-                await asyncio.sleep(0.05)  # Small delay between logs
-        else:
-            print(f"⚠️ No admin_log found in result!")
-
-        # 3. Risk Score Update - ALWAYS SEND (critical for dashboard updates)
-        # Get trust_score from trust_analysis if available
-        trust_analysis = result.get("trust_analysis", {})
-        trust_score = trust_analysis.get("trust_score") or result.get("trust_score", 50)
-        fraud_flags = trust_analysis.get("fraud_flags", []) or result.get("fraud_flags", [])
-        risk_category = trust_analysis.get("risk_category", "MEDIUM")
         
         await broadcast_to_admin({
-            "type": "risk_calculated",
+            "type": "stage_transition",
             "data": {
-                "risk_score": trust_score,
-                "risk_category": risk_category,
-                "factors": fraud_flags
+                "stage": current_stage,
+                "stage_number": result.get("stage_number"),
+                "stage_changed": result.get("stage_changed", False)
             },
+            "session_id": request.session_id,
             "timestamp": timestamp
         })
-        print(f"📊 Broadcasting Trust Score: {trust_score} | Risk: {risk_category} | Flags: {len(fraud_flags)}")
-
-        # 4. Customer Identification & Profile Update
-        customer_profile = result.get("customer_profile") or {}
-        if customer_profile:
-            behavioral_flags = customer_profile.get("behavioral_flags") or {}
-            risk_category = behavioral_flags.get("risk_category", "UNKNOWN")
-            
-            await broadcast_to_admin({
-                "type": "customer_identified",
-                "data": {
-                    "customer": customer_profile
-                },
-                "timestamp": timestamp
-            })
-            print(f"👤 Broadcasting Customer Profile: {customer_profile.get('name', 'Unknown')}, Risk: {risk_category}")
-
-        # 5. Bot Response with Admin Data
+        
         await broadcast_to_admin({
             "type": "bot_response",
-            "data": {
-                "response": result["ai_response"],
-                "admin_data": {
-                    "trust_score": result.get("trust_score"),
-                    "customer_profile": result.get("customer_profile"),
-                    "verification_status": result.get("verification_status")
-                }
-            },
+            "data": {"response": bot_response, "stage": current_stage},
+            "session_id": request.session_id,
+            "timestamp": timestamp
+        })
+        
+        if admin_state:
+            await broadcast_to_admin({
+                "type": "state_update",
+                "data": admin_state,
+                "session_id": request.session_id,
+                "timestamp": timestamp
+            })
+        
+        # Terminal stage check
+        is_terminal = current_stage in ["SANCTION", "REJECTION"]
+        
+        # Loan details for sanction - match frontend LoanDetails interface
+        loan_details = None
+        if current_stage == "SANCTION":
+            loan_details = {
+                "amount": session_data.get("pre_approved_limit") or 0,
+                "interest_rate": session_data.get("final_interest_rate") or 0,
+                "tenure_months": session_data.get("selected_tenure") or 0,
+                "monthly_emi": session_data.get("calculated_emi") or 0
+            }
+        
+        return ChatResponse(
+            response=bot_response,
+            session_id=request.session_id,
+            conversation_stage=current_stage,
+            missing_info=[],
+            decision=session_data.get("underwriting_result"),
+            show_upload=False,  # NO file uploads
+            show_sanction_letter=current_stage == "SANCTION",
+            loan_details=loan_details,
+            customer_name=session_data.get("user_name"),
+            session_closed=is_terminal,
+            closure_reason=session_data.get("underwriting_result") if is_terminal else None,
+            admin_data=admin_state
+        )
+        
+    except Exception as e:
+        print(f"❌ Chat error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        await broadcast_to_admin({
+            "type": "error",
+            "data": {"error": str(e)},
+            "session_id": request.session_id,
             "timestamp": datetime.now().isoformat()
         })
         
-        # Prepare response with ALL UI flags
-        response = ChatResponse(
-            response=result["ai_response"],
-            session_id=request.session_id,
-            conversation_stage=result.get("conversation_stage", "unknown"),
-            missing_info=result.get("missing_info", []),
-            decision=result.get("loan_decision"),
-            show_upload=result.get("show_upload", False),  # NEW: Upload button flag
-            show_sanction_letter=result.get("show_sanction_letter", False),  # NEW: Download button flag
-            loan_details=result.get("loan_details"),  # NEW: Loan details for sanction letter
-            customer_name=result.get("name"),  # NEW: Customer name for letter
-            admin_data={
-                "trust_score": result.get("trust_score"),
-                "verification_status": result.get("verification_status"),
-                "admin_log": result.get("admin_log", [])
-            }
-        )
-        
-        return response
-        
-    except Exception as e:
-        # Log error and broadcast to admin
-        error_data = {
-            "type": "error",
-            "session_id": request.session_id,
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-        await broadcast_to_admin(error_data)
-        
-        raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
-@app.post("/api/reset-session")
-async def reset_session(session_id: str = Form(...)):
-    """Reset/clear a conversation session"""
-    if session_id in sessions:
-        del sessions[session_id]
-        return {"success": True, "message": "Session cleared successfully"}
-    return {"success": True, "message": "Session not found (already cleared)"}
+@app.post("/api/v3/reset-session")
+async def reset_session(request: dict):
+    """Reset a session"""
+    session_id = request.get("session_id")
+    if session_id:
+        deterministic_reset_session(session_id)
+        return {"status": "success", "message": "Session reset"}
+    return {"status": "error", "message": "No session_id provided"}
 
 
-# PHASE 6: Sanction Letter Download Endpoint
+# ==================== SANCTION LETTER DOWNLOAD ====================
+
 @app.get("/api/download-sanction/{session_id}")
 async def download_sanction_letter(session_id: str):
-    """
-    PHASE 6: Generate and download sanction letter PDF
-    Called when sales agent closes the deal
-    """
+    """Download sanction letter PDF"""
     try:
-        # Get session
-        session = get_or_create_session(session_id)
-        user_profile = session.get("state", {}).get("user_profile", {})
-        loan_request = session.get("state", {}).get("loan_request", {})
-        negotiation = session.get("state", {}).get("negotiation_state", {})
+        state = deterministic_get_session_state(session_id)
         
-        # Extract data
-        customer_name = user_profile.get("name", "Valued Customer")
-        loan_amount = loan_request.get("amount", 500000)
-        interest_rate = negotiation.get("current_offered_rate", 12.0)
-        tenure = loan_request.get("tenure", 36)
-        emi = loan_request.get("emi", 15000)
-        phone = user_profile.get("phone", "")
-        pan = user_profile.get("pan", "")
+        if not state:
+            raise HTTPException(status_code=404, detail="Session not found")
         
-        # Generate PDF
+        customer_name = state.get("user_name", "Valued Customer")
+        loan_amount = state.get("pre_approved_limit", 500000)
+        interest_rate = state.get("final_interest_rate", 12.0)
+        tenure = state.get("selected_tenure", 24)
+        emi = state.get("calculated_emi", 15000)
+        phone = state.get("mobile_number", "")
+        pan = state.get("pan_number", "")
+        
         pdf_path = generate_sanction_letter(
             customer_name=customer_name,
-            loan_amount=loan_amount,
-            interest_rate=interest_rate,
-            tenure=tenure,
-            emi=emi,
-            phone=phone,
-            pan=pan
+            loan_amount=int(loan_amount) if loan_amount else 500000,
+            interest_rate=float(interest_rate) if interest_rate else 12.0,
+            tenure=int(tenure) if tenure else 24,
+            emi=int(emi) if emi else 15000,
+            phone=phone or "",
+            pan=pan or "",
+            approval_type="Standard",
+            session_id=session_id
         )
         
-        # Return file response
         filename = f"Tata_Capital_Sanction_Letter_{customer_name.replace(' ', '_')}.pdf"
-        
-        def cleanup():
-            """Cleanup function to delete temp file after sending"""
-            cleanup_pdf_file(pdf_path)
         
         return FileResponse(
             pdf_path,
             media_type='application/pdf',
-            filename=filename,
-            background=cleanup  # Auto-cleanup after sending
+            filename=filename
         )
         
     except Exception as e:
-        print(f"❌ PDF generation error: {e}")
-        raise HTTPException(status_code=500, detail=f"Could not generate sanction letter: {str(e)}")
+        print(f"❌ PDF download error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/upload")
-async def upload_document_vision(
-    file: UploadFile = File(...),
-    session_id: str = Form(...),
-    document_count: str = Form(...)
-):
-    """
-    PHASE 5: Document Intelligence with Gemini Vision
-    Actually analyzes uploaded documents instead of mocking
-    """
-    
-    try:
-        # Read file contents
-        contents = await file.read()
-        doc_count = int(document_count)
-        
-        # Get session
-        session = get_or_create_session(session_id)
-        
-        print(f"\n{'='*60}")
-        print(f"📤 VISION DOCUMENT PROCESSING")
-        print(f"Session ID: {session_id}")
-        print(f"File: {file.filename}")
-        print(f"File size: {len(contents)} bytes")
-        print(f"{'='*60}\n")
-        
-        # PHASE 5: Use Gemini Vision to analyze document
-        if agent:
-            try:
-                # Create GeminiLLM instance with API key
-                gemini = GeminiLLM(GEMINI_API_KEY)
-                
-                # Send to Gemini Vision (base64 encode the file)
-                import base64
-                file_data = base64.b64encode(contents).decode('utf-8')
-                
-                # Set correct mime type based on file extension
-                filename_lower = file.filename.lower()
-                if filename_lower.endswith('.pdf'):
-                    file_mime = 'application/pdf'
-                elif filename_lower.endswith('.png'):
-                    file_mime = 'image/png'
-                elif filename_lower.endswith('.jpg') or filename_lower.endswith('.jpeg'):
-                    file_mime = 'image/jpeg'
-                else:
-                    file_mime = file.content_type or 'image/jpeg'
-                
-                print(f"📄 File MIME type: {file_mime}")
-                
-                # Determine document type from filename
-                if 'salary' in filename_lower or 'slip' in filename_lower or 'payslip' in filename_lower:
-                    doc_type_hint = 'Salary Slip'
-                elif 'pan' in filename_lower:
-                    doc_type_hint = 'PAN Card'
-                elif 'bank' in filename_lower or 'statement' in filename_lower:
-                    doc_type_hint = 'Bank Statement'
-                else:
-                    doc_type_hint = 'Unknown'
-                
-                # PHASE 5: Vision prompt for document analysis based on type
-                if doc_type_hint == 'Salary Slip':
-                    vision_prompt = """Analyze this Salary Slip document and extract ALL salary components as JSON:
-{
-    "doc_type": "Salary Slip",
-    "employee_name": "<full name of the employee>",
-    "employer_name": "<company name>",
-    "month": "<month and year string e.g. 'January 2024'>",
-    "salary_date": "<date salary was credited if visible, format: YYYY-MM-DD or null>",
-    
-    "earnings": {
-        "basic_pay": <number - Basic Salary component>,
-        "hra": <number - House Rent Allowance or 0>,
-        "special_allowances": <number - sum of all other allowances like conveyance, medical, etc or 0>,
-        "other_earnings": <number - any other additions or 0>
-    },
-    
-    "deductions": {
-        "pf_deduction": <number - Provident Fund deduction or 0>,
-        "tax_deduction": <number - TDS/Income Tax deduction or 0>,
-        "professional_tax": <number - Professional Tax or 0>,
-        "other_deductions": <number - any other deductions or 0>
-    },
-    
-    "gross_salary": <number - Total Earnings before deductions>,
-    "total_deductions": <number - Sum of all deductions>,
-    "net_salary": <number - the NET SALARY or TAKE HOME amount>,
-    
-    "pan_number": "<PAN if visible or null>",
-    "employee_id": "<Employee ID if visible or null>",
-    
-    "visual_analysis": {
-        "font_consistency": <true if fonts are consistent, false if different fonts detected>,
-        "alignment_quality": <true if text alignment is proper, false if suspicious>,
-        "image_quality": "<good/medium/poor>",
-        "signs_of_editing": <true if there are visual signs of editing/tampering, false otherwise>,
-        "suspicion_score": <0-100, higher means more suspicious of tampering>
-    },
-    
-    "confidence": <0-100 based on clarity and extraction certainty>
-}
+# ==================== ADMIN ENDPOINTS ====================
 
-IMPORTANT: Extract EXACT numbers as shown. Check for visual anomalies like:
-- Different fonts used for numbers vs text
-- Suspicious text alignment or spacing
-- Signs of digital editing or cut-paste
-- Inconsistent formatting
-
-Return ONLY valid JSON."""""
-                elif doc_type_hint == 'PAN Card':
-                    vision_prompt = """Analyze this PAN Card document and extract the following fields as JSON:
-{
-    "doc_type": "PAN Card",
-    "pan_number": "<10-character PAN number>",
-    "full_name": "<full name as shown on PAN>",
-    "father_name": "<father's name if visible or null>",
-    "dob": "<date of birth if visible or null>",
-    
-    "visual_analysis": {
-        "font_consistency": <true if fonts are consistent, false if different fonts detected>,
-        "hologram_visible": <true if hologram/watermark visible, false otherwise>,
-        "signs_of_editing": <true if there are visual signs of editing/tampering, false otherwise>,
-        "suspicion_score": <0-100, higher means more suspicious of tampering>
-    },
-    
-    "confidence": <0-100 based on clarity>
-}
-
-Return ONLY valid JSON. Extract the EXACT text shown."""
-                elif doc_type_hint == 'Bank Statement':
-                    vision_prompt = """Analyze this Bank Statement document and extract the following fields as JSON:
-{
-    "doc_type": "Bank Statement",
-    "account_holder_name": "<name on the account>",
-    "bank_name": "<name of the bank>",
-    "account_number": "<account number, can be partially masked>",
-    "statement_period": {
-        "from_date": "<start date in YYYY-MM-DD format>",
-        "to_date": "<end date in YYYY-MM-DD format>"
-    },
-    
-    "opening_balance": <number>,
-    "closing_balance": <number>,
-    
-    "transactions": [
-        {
-            "date": "<YYYY-MM-DD>",
-            "description": "<transaction narration>",
-            "type": "CREDIT" or "DEBIT",
-            "amount": <number>,
-            "balance": <number after transaction>
-        }
-    ],
-    
-    "credit_summary": {
-        "total_credits": <total of all credit transactions>,
-        "salary_credits": [<list of amounts that appear to be salary credits based on description>],
-        "credit_count": <number of credit transactions>
-    },
-    
-    "visual_analysis": {
-        "font_consistency": <true if fonts are consistent>,
-        "alignment_quality": <true if proper alignment>,
-        "signs_of_editing": <true if tampering detected>,
-        "suspicion_score": <0-100>
-    },
-    
-    "confidence": <0-100>
-}
-
-Extract ALL visible transactions. Focus on identifying salary credit entries.
-Return ONLY valid JSON."""
-                else:
-                    vision_prompt = """Analyze this document and extract the following fields as JSON:
-{
-    "doc_type": "Salary Slip" | "Bank Statement" | "PAN Card" | "CIBIL Report" | "Other",
-    "net_salary": <number or null>,
-    "employer_name": "<string or null>",
-    "pan_number": "<string or null>",
-    "bank_name": "<string or null>",
-    "account_balance": <number or null>,
-    "full_name": "<name if visible or null>",
-    "confidence": <0-100>
-}
-
-Return ONLY valid JSON."""
-                
-                # Call Gemini Vision API
-                try:
-                    extracted_data = await gemini.analyze_document(file_data, file_mime, vision_prompt)
-                    print(f"📄 Gemini Vision extracted: {extracted_data}")
-                except Exception as vision_error:
-                    print(f"⚠️ Vision API error, using fallback: {vision_error}")
-                    # Fallback mock data for demo - with proper salary components
-                    user_name = session.get("state", {}).get("user_profile", {}).get("name", "Employee")
-                    if doc_type_hint == 'Salary Slip':
-                        extracted_data = {
-                            "doc_type": "Salary Slip",
-                            "employee_name": user_name,
-                            "employer_name": "Tech Mahindra Ltd",
-                            "month": "November 2025",
-                            "earnings": {
-                                "basic_pay": 50000,
-                                "hra": 20000,
-                                "special_allowances": 35000,
-                                "other_earnings": 0
-                            },
-                            "deductions": {
-                                "pf_deduction": 6000,
-                                "tax_deduction": 4000,
-                                "professional_tax": 200,
-                                "other_deductions": 0
-                            },
-                            "gross_salary": 105000,
-                            "total_deductions": 10200,
-                            "net_salary": 94800,
-                            "visual_analysis": {
-                                "font_consistency": True,
-                                "alignment_quality": True,
-                                "image_quality": "good",
-                                "signs_of_editing": False,
-                                "suspicion_score": 5
-                            },
-                            "confidence": 85
-                        }
-                    else:
-                        extracted_data = {
-                            "doc_type": doc_type_hint,
-                            "full_name": user_name,
-                            "pan_number": "ABCDE1234F" if doc_type_hint == 'PAN Card' else None,
-                            "confidence": 75
-                        }
-                
-                # Get user profile from session
-                user_profile = session.get("state", {}).get("user_profile", {})
-                financial_data = session.get("state", {}).get("financial_data", {})
-                expected_salary = financial_data.get("monthly_income", 0)
-                claimed_name = user_profile.get("name", "")
-                
-                # ========== STRICT VERIFICATION: CROSS-CHECK LOGIC ==========
-                docs_verified = False
-                verification_message = ""
-                discrepancy_flags = []
-                
-                # Store extracted data for underwriting to use
-                if "document_state" not in session["state"]:
-                    session["state"]["document_state"] = {}
-                
-                # Ensure financial_data exists in session state
-                if "financial_data" not in session["state"]:
-                    session["state"]["financial_data"] = {}
-                
-                # ---- SALARY VERIFICATION (Strict 90% Rule) ----
-                if extracted_data.get("net_salary"):
-                    proven_salary = extracted_data["net_salary"]
-                    session["state"]["document_state"]["proven_salary"] = proven_salary
-                    
-                    if expected_salary > 0:
-                        # STRICT RULE: If proven_salary < 90% of claimed_salary → Discrepancy
-                        if proven_salary < (0.9 * expected_salary):
-                            discrepancy_flags.append("SALARY_DISCREPANCY")
-                            verification_message = f"**Salary Discrepancy Detected**\n\nThe document shows a salary of **Rs. {proven_salary:,}**, which is lower than the Rs. {expected_salary:,} you mentioned.\n\n**I must use the documented amount (Rs. {proven_salary:,}) for underwriting.**"
-                            
-                            # Update financial data with PROVEN salary
-                            session["state"]["financial_data"]["monthly_income"] = proven_salary
-                            session["state"]["financial_data"]["annual_income"] = proven_salary * 12
-                            session["state"]["financial_data"]["salary_source"] = "DOCUMENT_VERIFIED"
-                            
-                            # Recalculate pre-approved limit with proven salary
-                            credit_score = financial_data.get("credit_score", 650)
-                            if credit_score >= 750:
-                                new_pre_approved = min(proven_salary * 60, 2000000)
-                            elif credit_score >= 700:
-                                new_pre_approved = min(proven_salary * 48, 1500000)
-                            else:
-                                new_pre_approved = min(proven_salary * 36, 1000000)
-                            session["state"]["financial_data"]["pre_approved_limit"] = new_pre_approved
-                            
-                            docs_verified = True  # Document is valid, just lower than claimed
-                        elif proven_salary >= (0.9 * expected_salary):
-                            docs_verified = True
-                            verification_message = f"**Salary Verified:** Rs. {proven_salary:,} matches your profile!"
-                            session["state"]["financial_data"]["monthly_income"] = proven_salary
-                            session["state"]["financial_data"]["salary_source"] = "DOCUMENT_VERIFIED"
-                    else:
-                        # No claimed salary - use proven salary directly
-                        docs_verified = True
-                        session["state"]["financial_data"]["monthly_income"] = proven_salary
-                        session["state"]["financial_data"]["salary_source"] = "DOCUMENT_VERIFIED"
-                        verification_message = f"**Salary Extracted:** Rs. {proven_salary:,}/month"
-                
-                # ---- NAME/IDENTITY VERIFICATION (Fuzzy Match 80% Rule) ----
-                document_name = extracted_data.get("employee_name") or extracted_data.get("full_name")
-                if document_name and claimed_name:
-                    session["state"]["document_state"]["document_name"] = document_name
-                    
-                    # Use fuzzy matching if available
-                    if fuzz:
-                        name_similarity = fuzz.ratio(claimed_name.lower(), document_name.lower())
-                        session["state"]["document_state"]["name_similarity"] = name_similarity
-                        
-                        if name_similarity < 80:
-                            discrepancy_flags.append("NAME_MISMATCH")
-                            docs_verified = False
-                            verification_message += f"\n\n**Identity Mismatch Detected**\n\nThe document shows the name **'{document_name}'**, but you registered as **'{claimed_name}'** (Match: {name_similarity}%).\n\n**This document cannot be accepted.** Please upload a document with your registered name."
-                        else:
-                            verification_message += f"\n\n**Name Verified:** {document_name} (Match: {name_similarity}%)"
-                    else:
-                        # Simple comparison fallback
-                        if claimed_name.lower().strip() in document_name.lower() or document_name.lower() in claimed_name.lower().strip():
-                            verification_message += f"\n\n**Name Verified:** {document_name}"
-                        else:
-                            discrepancy_flags.append("NAME_MISMATCH")
-                            docs_verified = False
-                            verification_message += f"\n\n**Identity Mismatch:** Document shows '{document_name}', expected '{claimed_name}'"
-                
-                # ---- PAN VERIFICATION ----
-                if extracted_data.get("pan_number"):
-                    session["state"]["document_state"]["verified_pan"] = extracted_data["pan_number"]
-                    verification_message += f"\n\n**PAN Verified:** {extracted_data['pan_number']}"
-                
-                # Store discrepancy flags
-                session["state"]["document_state"]["discrepancy_flags"] = discrepancy_flags
-                session["state"]["document_state"]["docs_verified"] = docs_verified
-                session["state"]["document_state"][f"doc_{doc_count}"] = extracted_data
-                
-                # ========== FRAUD DETECTION (RISK CONTROL) ==========
-                fraud_detected = False
-                fraud_message = ""
-                risk_control_results = {
-                    "fraud_detected": False,
-                    "math_check": None,
-                    "bank_check": None,
-                    "visual_check": None,
-                    "fraud_reasons": []
-                }
-                
-                # Store extracted data by document type for cross-checks
-                if "extracted_data" not in session["state"]["document_state"]:
-                    session["state"]["document_state"]["extracted_data"] = {}
-                
-                doc_type = extracted_data.get("doc_type", doc_type_hint)
-                session["state"]["document_state"]["extracted_data"][doc_type] = extracted_data
-                
-                # 1. MATHEMATICAL INTEGRITY CHECK (Salary Slip)
-                if doc_type == "Salary Slip":
-                    math_result = validate_salary_math(extracted_data)
-                    risk_control_results["math_check"] = math_result
-                    print(f"🔢 Math Check Result: {math_result['status']} - {math_result.get('reason', '')}")
-                    
-                    if math_result["status"] == "FRAUD_DETECTED":
-                        fraud_detected = True
-                        risk_control_results["fraud_reasons"].append(f"Math: {math_result.get('reason')}")
-                
-                # 2. VISUAL FORGERY CHECK (All Documents)
-                visual_result = check_visual_forgery(extracted_data)
-                risk_control_results["visual_check"] = visual_result
-                print(f"👁️ Visual Check Result: {visual_result['status']} - Score: {visual_result.get('suspicion_score', 0)}")
-                
-                if visual_result["status"] == "MANUAL_REVIEW":
-                    fraud_detected = True
-                    risk_control_results["fraud_reasons"].append(f"Visual: {visual_result.get('reason')}")
-                
-                # 3. BANK STATEMENT CROSS-CHECK (If both Salary Slip and Bank Statement are uploaded)
-                all_extracted = session["state"]["document_state"].get("extracted_data", {})
-                if "Salary Slip" in all_extracted and "Bank Statement" in all_extracted:
-                    salary_data = all_extracted["Salary Slip"]
-                    bank_data = all_extracted["Bank Statement"]
-                    bank_result = cross_check_bank_statement(salary_data, bank_data)
-                    risk_control_results["bank_check"] = bank_result
-                    print(f"🏦 Bank Cross-Check Result: {bank_result['status']} - Found: {bank_result.get('salary_found')}")
-                    
-                    if bank_result["status"] == "DISCREPANCY":
-                        fraud_detected = True
-                        risk_control_results["fraud_reasons"].append(f"Bank: {bank_result.get('reason')}")
-                
-                # Store risk control state
-                risk_control_results["fraud_detected"] = fraud_detected
-                session["state"]["risk_control"] = risk_control_results
-                
-                # If fraud detected, return polite rejection
-                if fraud_detected:
-                    print(f"FRAUD DETECTED: {risk_control_results['fraud_reasons']}")
-                    
-                    fraud_message = f"""**Document Verification Issue**
-
-I'm having trouble verifying the authenticity of your uploaded document. This could happen due to:
-- Image quality or resolution issues
-- Document not being an original copy
-- Internal formatting inconsistencies
-
-**What you can do:**
-- Please upload the **original PDF** downloaded directly from your payroll portal or bank's website.
-- If uploading photos, ensure they're clear, uncropped, and include the full document.
-
-**Need help?** Our team can assist you at **1800-XXX-XXXX** (Toll-free).
-
-_Your application is safe - you can re-upload the correct document to continue._"""
-                    
-                    session["state"]["document_state"]["verification_status"] = "FRAUD_SUSPECTED"
-                    session["state"]["document_state"]["requires_reupload"] = True
-                    
-                    return UploadResponse(
-                        success=False,
-                        message="Document verification failed",
-                        response=fraud_message,
-                        session_id=session_id,
-                        document_verified=False,
-                        extracted_data=extracted_data,
-                        trust_score=max(10, 50 - visual_result.get("suspicion_score", 0))
-                    )
-                
-                # Process through agent
-                result = await agent.process_message(
-                    user_message=f"document uploaded: {file.filename}",
-                    conversation_history=session.get("conversation_history", []),
-                    previous_state=session.get("state", {})
-                )
-                
-                # Add verification info to response
-                if verification_message:
-                    result["ai_response"] += f"\n\n{verification_message}"
-                
-                return UploadResponse(
-                    success=True,
-                    message="Document processed successfully",
-                    response=result.get("ai_response", "Document processed successfully"),
-                    session_id=session_id,
-                    document_verified=docs_verified,
-                    extracted_data=extracted_data,
-                    trust_score=result.get("trust_score", 50)
-                )
-                
-            except Exception as e:
-                print(f"❌ Vision processing error: {e}")
-                return UploadResponse(
-                    success=False,
-                    message=f"Document processing failed: {str(e)}",
-                    response="Sorry, I couldn't process that document. Please try uploading again.",
-                    session_id=session_id
-                )
-        
-        return UploadResponse(
-            success=False,
-            message="Agent not available",
-            response="Service temporarily unavailable",
-            session_id=session_id
-        )
-    
-    except Exception as e:
-        print(f"❌ Upload error: {e}")
-        return UploadResponse(
-            success=False,
-            message=f"Upload failed: {str(e)}",
-            response="Sorry, something went wrong processing your document.",
-            session_id=session_id
-        )
-
-
-@app.get("/session/{session_id}", response_model=SessionInfoResponse)
-async def get_session_info(session_id: str):
-    """Get information about a specific session"""
-    
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    session = sessions[session_id]
-    
-    return SessionInfoResponse(
-        session_id=session_id,
-        conversation_history=session.get("messages", []),
-        current_state=session.get("state", {})
-    )
-
-
-@app.delete("/session/{session_id}")
-async def delete_session(session_id: str):
-    """Delete a session"""
-    
-    if session_id in sessions:
-        del sessions[session_id]
-        return {"message": f"Session {session_id} deleted successfully"}
-    else:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-
-# ==================== ADMIN DASHBOARD ENDPOINTS ====================
 @app.websocket("/admin/stream")
 async def admin_websocket(websocket: WebSocket):
-    """
-    WebSocket endpoint for admin "God Mode" dashboard
-    Streams all agent activity in real-time
-    """
-    
+    """WebSocket for admin dashboard"""
     await websocket.accept()
     admin_connections.append(websocket)
     
-    # Send initial connection message
     await websocket.send_json({
         "type": "connection",
-        "message": "Connected to TataSmartAgent Admin Stream",
-        "active_sessions": len(sessions),
+        "message": "Connected to TataSmartAgent Admin Stream (V3)",
         "timestamp": datetime.now().isoformat()
     })
     
     try:
         while True:
-            # Keep connection alive and listen for any client messages
             data = await websocket.receive_text()
             
-            # Handle admin commands
             if data == "get_sessions":
+                all_sessions = get_all_admin_sessions()
                 await websocket.send_json({
                     "type": "sessions_list",
-                    "sessions": list(sessions.keys()),
-                    "count": len(sessions),
-                    "timestamp": datetime.now().isoformat()
+                    "sessions": all_sessions,
+                    "count": len(all_sessions)
                 })
-            elif data.startswith("get_session:"):
-                session_id = data.split(":")[1]
-                if session_id in sessions:
-                    await websocket.send_json({
-                        "type": "session_detail",
-                        "session": sessions[session_id],
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    
+                
     except WebSocketDisconnect:
-        admin_connections.remove(websocket)
-        print(f"Admin disconnected. Active connections: {len(admin_connections)}")
+        if websocket in admin_connections:
+            admin_connections.remove(websocket)
 
 
 @app.get("/admin/sessions")
-async def get_all_sessions():
-    """Get list of all active sessions"""
+async def get_admin_sessions():
+    """Get all active sessions for admin dashboard"""
+    all_sessions = get_all_admin_sessions()
+    
+    # Transform sessions to include 'state' wrapper for frontend compatibility
+    transformed_sessions = []
+    for session in all_sessions:
+        transformed_sessions.append({
+            "session_id": session.get("session_id"),
+            "created_at": session.get("timestamps", {}).get("created_at"),
+            "last_activity": session.get("timestamps", {}).get("last_updated"),
+            "message_count": 0,  # Not tracking message count
+            "state": session  # Wrap the full admin state under 'state' key
+        })
+    
     return {
-        "total_sessions": len(sessions),
-        "sessions": [
-            {
-                "session_id": sid,
-                "created_at": session["created_at"],
-                "last_activity": session["last_activity"],
-                "message_count": len(session.get("messages", [])),
-                "state": session.get("state", {})
-            }
-            for sid, session in sessions.items()
-        ]
+        "active_sessions": len(transformed_sessions),
+        "sessions": transformed_sessions,
+        "timestamp": datetime.now().isoformat()
     }
+
+
+@app.get("/admin/session/{session_id}")
+async def get_admin_session_detail(session_id: str):
+    """Get detailed state for a specific session"""
+    admin_state = get_admin_state(session_id)
+    
+    if not admin_state:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    return {
+        "session_id": session_id,
+        "state": admin_state
+    }
+
+
+@app.post("/api/admin-event")
+async def receive_admin_event(request: Request):
+    """Receive events from ChatWidget and broadcast to Admin"""
+    try:
+        event_data = await request.json()
+        await broadcast_to_admin(event_data)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/admin/reset")
+async def reset_all_sessions():
+    """Clear all sessions"""
+    # Reset the flow controller
+    controller = get_flow_controller()
+    controller.sessions.clear()
+    
+    await broadcast_to_admin({
+        "type": "system_reset",
+        "message": "All sessions cleared",
+        "timestamp": datetime.now().isoformat()
+    })
+    
+    return {"message": "All sessions reset", "timestamp": datetime.now().isoformat()}
+
+
+# ==================== AUTH ====================
+
+@app.post("/api/auth/login")
+async def login(credentials: Dict):
+    """Admin login"""
+    if credentials.get("username") == "admin" and credentials.get("password") == "tata123":
+        return {
+            "success": True,
+            "token": "mock_jwt_token_v3",
+            "user": {"username": "admin", "role": "bank_officer", "name": "Admin User"}
+        }
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+# ==================== TEST ENDPOINTS ====================
+
+@app.get("/test/customer/{phone}")
+async def test_get_customer(phone: str):
+    """Test endpoint to get customer by phone"""
+    customer = MockDataProvider.get_customer_by_phone(phone)
+    if customer:
+        return customer
+    raise HTTPException(status_code=404, detail="Customer not found")
 
 
 @app.get("/admin/customers")
 async def get_all_customers():
-    """Get all mock customer profiles (for testing)"""
+    """Get all mock customer profiles"""
     return {
         "total_customers": len(MockDataProvider.get_all_customers()),
         "customers": [
@@ -1086,114 +928,8 @@ async def get_all_customers():
     }
 
 
-@app.post("/api/admin-event")
-async def receive_admin_event(request: Request):
-    """
-    Receive events from ChatWidget and broadcast to Admin Dashboard
-    This enables the 'scripted mode' to sync both screens
-    """
-    try:
-        event_data = await request.json()
-        
-        # Broadcast to all connected admin dashboards
-        await broadcast_to_admin(event_data)
-        
-        return {"success": True, "message": "Event broadcasted"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+# ==================== ERROR HANDLER ====================
 
-
-@app.post("/admin/reset")
-async def reset_all_sessions():
-    """Clear all sessions (for testing)"""
-    global sessions
-    count = len(sessions)
-    sessions = {}
-    
-    await broadcast_to_admin({
-        "type": "system_reset",
-        "message": f"All {count} sessions cleared",
-        "timestamp": datetime.now().isoformat()
-    })
-    
-    return {
-        "message": f"Reset complete. Cleared {count} sessions.",
-        "timestamp": datetime.now().isoformat()
-    }
-
-
-# ==================== TESTING ENDPOINTS ====================
-@app.post("/test/verify-customer")
-async def test_verify_customer(phone: str, pan: str):
-    """Test endpoint to verify customer lookup"""
-    result = MockDataProvider().verify_customer(phone, pan)
-    return result
-
-
-@app.get("/test/customer/{phone}")
-async def test_get_customer(phone: str):
-    """Test endpoint to get customer by phone"""
-    customer = MockDataProvider.get_customer_by_phone(phone)
-    if customer:
-        return customer
-    else:
-        raise HTTPException(status_code=404, detail="Customer not found")
-
-
-# ==================== LEGACY AUTH ENDPOINT (For backward compatibility) ====================
-@app.post("/api/auth/login")
-async def login(credentials: Dict):
-    """Mock login for admin dashboard"""
-    username = credentials.get("username")
-    password = credentials.get("password")
-    
-    if username == "admin" and password == "tata123":
-        return {
-            "success": True,
-            "token": "mock_jwt_token_v3",
-            "user": {
-                "username": "admin",
-                "role": "bank_officer",
-                "name": "Admin User"
-            }
-        }
-    
-    raise HTTPException(status_code=401, detail="Invalid credentials")
-
-
-# ==================== LEGACY CHAT ENDPOINT (For backward compatibility) ====================
-@app.post("/api/chat")
-async def legacy_chat_endpoint(request: Request):
-    """Legacy chat endpoint for backward compatibility"""
-    try:
-        body = await request.json()
-        message = body.get("message", "")
-        session_id = body.get("session_id")
-        
-        # Generate session_id if not provided
-        if not session_id:
-            import time
-            import random
-            session_id = f"session_{int(time.time())}_{random.randint(1000, 9999)}"
-        
-        chat_req = ChatRequest(
-            message=message,
-            session_id=session_id,
-            metadata=None
-        )
-        result = await chat_endpoint(chat_req)
-        return {
-            "session_id": result.session_id,
-            "response": result.response,
-            "state": result.conversation_stage,
-            "decision": result.decision
-        }
-    except Exception as e:
-        print(f"Error in chat endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==================== ERROR HANDLERS ====================
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """Global exception handler"""
@@ -1207,17 +943,17 @@ async def global_exception_handler(request, exc):
     )
 
 
-# ==================== STARTUP MESSAGE ====================
+# ==================== MAIN ====================
 if __name__ == "__main__":
     import uvicorn
     
     print("""
     ╔════════════════════════════════════════════════════════════╗
-    ║        TataSmartAgent - Production Backend                ║
+    ║        TataSmartAgent - V3 Deterministic Flow             ║
     ║                                                            ║
-    ║  🤖 Agentic AI Loan Officer                               ║
-    ║  🧠 Powered by LangGraph + Google Gemini                  ║
-    ║  🔐 Production-Grade Underwriting                         ║
+    ║  🏦 16-Stage Strict Linear Sequence                       ║
+    ║  🔒 Backend Controls ALL Logic                            ║
+    ║  📊 Admin Dashboard = Exact Backend State                 ║
     ╚════════════════════════════════════════════════════════════╝
     """)
     
@@ -1228,4 +964,3 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     )
-

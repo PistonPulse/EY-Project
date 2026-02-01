@@ -1,7 +1,362 @@
-import { MessageCircle, X, Send, Upload, Download, CheckCircle, RotateCcw } from 'lucide-react';
-import { useState, useRef, useEffect } from 'react';
+import { MessageCircle, X, Send, Upload, Download, CheckCircle, RotateCcw, Clock } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import tataLogo from "../assets/Tata_Capital_Logo-01.jpg";
 import jsPDF from 'jspdf';
+
+/**
+ * ================================================================================
+ * PHASE 10: VISUAL POLISH, TIMING REALISM & TONE CORRECTION
+ * ================================================================================
+ * 
+ * PURPOSE:
+ * --------
+ * Make the chatbot feel like a real NBFC product, not a demo. This involves:
+ * 
+ * 1. TIMING REALISM: Adding deliberate delays (1-2s) for verification operations
+ *    - WHY: Instant verification feels fake. Real banking systems take time.
+ *    - Banks intentionally show "verifying" states to build trust and indicate
+ *      that actual work is happening (even if technically faster).
+ *    - This matches user expectations from mobile banking apps.
+ * 
+ * 2. LOADING STATES: Contextual loading messages that explain what's happening
+ *    - WHY: "Processing..." is vague. "Verifying PAN with NSDL..." is trustworthy.
+ *    - Users understand that real verification takes time and involves external systems.
+ * 
+ * 3. PROFESSIONAL TONE: Remove emojis after KYC, use banking language
+ *    - WHY: Initial greeting can be friendly, but verification stages should be formal.
+ *    - Real banks switch to formal tone when handling sensitive operations.
+ * 
+ * 4. INPUT DISABLING: Prevent user input during verification delays
+ *    - WHY: Users shouldn't be able to interrupt mid-verification.
+ *    - This prevents confusion and maintains conversation integrity.
+ * 
+ * 5. EDGE CASE HANDLING: Session persistence, idle states, graceful recovery
+ *    - WHY: Real banking apps don't lose state on refresh or idle timeout.
+ * 
+ * ================================================================================
+ * WHY TIMING DELAYS INCREASE TRUST IN BANKING UX:
+ * ================================================================================
+ * 
+ * Research in banking UX shows that users DISTRUST instant verification:
+ * - "That was too fast - did it really check anything?"
+ * - "My bank takes 30 seconds, this took 0.5s - seems fake"
+ * 
+ * Optimal delays for perceived legitimacy (based on mobile banking UX studies):
+ * - OTP sending: 1.5-2s (SMS gateway simulation)
+ * - Identity verification: 1.5-2s (bureau API simulation)
+ * - Credit check: 2-3s (CIBIL API simulation)
+ * - Underwriting: 2-3s (complex calculation simulation)
+ * 
+ * These delays should feel deliberate, not laggy. Loading indicators must be
+ * smooth and contextual to convey "working" not "broken".
+ * 
+ * ================================================================================
+ */
+
+// ================================================================================
+// PHASE 10: TIMING CONFIGURATION - REALISTIC BANKING DELAYS
+// ================================================================================
+// These delays simulate real banking verification times to build user trust.
+// Values are in milliseconds and calibrated based on mobile banking UX research.
+
+interface VerificationDelay {
+  duration: number;      // Delay in ms before showing response
+  loadingText: string;   // What to show during the delay
+  description: string;   // For documentation purposes
+  steps?: string[];      // Multi-step loading messages
+}
+
+const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
+  // ================================================================================
+  // V4 16-STAGE FLOW DELAYS - DYNAMIC CREDIT SCORING EXPERIENCE
+  // New stages: INCOME, EXISTING_EMI, DOB for user-provided financial data
+  // ================================================================================
+  
+  // Stage 1: GREETING - Quick welcome
+  GREETING: {
+    duration: 1500,
+    loadingText: 'Connecting to Tata Capital...',
+    description: 'Quick connection, friendly start',
+    steps: ['Establishing secure connection...', 'Initializing chat session...', 'Connected!']
+  },
+  
+  // Stage 2: PURPOSE - Understanding needs
+  PURPOSE: {
+    duration: 1800,
+    loadingText: 'Processing...',
+    description: 'Analyzing loan purpose',
+    steps: ['Recording your requirement...', 'Analyzing loan category...', 'Purpose noted!']
+  },
+  
+  // Stage 3: AMOUNT - Loan amount collection
+  AMOUNT: {
+    duration: 1500,
+    loadingText: 'Processing amount...',
+    description: 'Recording loan amount',
+    steps: ['Validating amount format...', 'Checking eligibility range...', 'Amount recorded!']
+  },
+  
+  // Stage 4: CITY - Location collection
+  CITY: {
+    duration: 1800,
+    loadingText: 'Verifying serviceability...',
+    description: 'Recording city for serviceability',
+    steps: ['Checking branch network...', 'Verifying service coverage...', 'Location verified!']
+  },
+  
+  // Stage 5: EMPLOYMENT_TYPE - Employment verification
+  EMPLOYMENT_TYPE: {
+    duration: 1500,
+    loadingText: 'Processing...',
+    description: 'Recording employment type',
+    steps: ['Recording employment details...', 'Updating customer profile...', 'Details saved!']
+  },
+  
+  // Stage 6: NAME - Customer identification
+  NAME: {
+    duration: 1200,
+    loadingText: 'Recording details...',
+    description: 'Customer name collection',
+    steps: ['Validating name format...', 'Saving to profile...']
+  },
+  
+  // Stage 7: MOBILE - Phone number collection & OTP sending
+  MOBILE: {
+    duration: 4000,
+    loadingText: 'Sending OTP...',
+    description: 'Setting up mobile verification',
+    steps: [
+      'Validating mobile number...',
+      'Connecting to SMS gateway...',
+      'Generating secure OTP...',
+      'Dispatching OTP to your mobile...',
+      'OTP sent successfully!'
+    ]
+  },
+  
+  // Stage 8: OTP - OTP verification (key security step)
+  OTP: {
+    duration: 4500,
+    loadingText: 'Verifying OTP...',
+    description: 'Authenticating with telecom gateway',
+    steps: [
+      'Connecting to telecom provider...',
+      'Validating OTP format...',
+      'Verifying with authentication server...',
+      'Cross-checking with records...',
+      'OTP verified successfully!'
+    ]
+  },
+  
+  // Stage 9: INCOME - Monthly income collection (NEW)
+  INCOME: {
+    duration: 2000,
+    loadingText: 'Processing income details...',
+    description: 'Recording and validating monthly income',
+    steps: [
+      'Recording income amount...',
+      'Validating income format...',
+      'Updating financial profile...',
+      'Income recorded!'
+    ]
+  },
+  
+  // Stage 10: EXISTING_EMI - Existing loan/EMI collection (NEW)
+  EXISTING_EMI: {
+    duration: 2500,
+    loadingText: 'Analyzing debt profile...',
+    description: 'Calculating debt-to-income ratio',
+    steps: [
+      'Recording existing EMI...',
+      'Calculating DTI ratio...',
+      'Analyzing repayment capacity...',
+      'Debt profile updated!'
+    ]
+  },
+  
+  // Stage 11: DOB - Age/Date of Birth collection (NEW)
+  DOB: {
+    duration: 1500,
+    loadingText: 'Verifying age...',
+    description: 'Recording age for eligibility check',
+    steps: [
+      'Processing date of birth...',
+      'Calculating age...',
+      'Verifying eligibility criteria...',
+      'Age verified!'
+    ]
+  },
+  
+  // Stage 12: KYC - PAN verification (important identity step)
+  KYC: {
+    duration: 6000,
+    loadingText: 'Verifying PAN...',
+    description: 'Identity verification via PAN',
+    steps: [
+      'Connecting to NSDL server...',
+      'Fetching PAN details...',
+      'Validating PAN format...',
+      'Verifying identity with Income Tax database...',
+      'Connecting to CRM server...',
+      'Fetching customer profile...',
+      'Identity verification complete!'
+    ]
+  },
+  
+  // Stage 13: OFFER_DISCUSSION - Pre-approved offer check (with credit score calculation)
+  OFFER_DISCUSSION: {
+    duration: 8000,
+    loadingText: 'Calculating credit score...',
+    description: 'Dynamic credit scoring and offer generation',
+    steps: [
+      'Analyzing financial profile...',
+      'Calculating debt-to-income ratio...',
+      'Evaluating income stability...',
+      'Assessing age and employment factors...',
+      'Computing credit score...',
+      'Calculating maximum eligibility...',
+      'Determining interest rate...',
+      'Generating personalized offer...',
+      'Offer ready!'
+    ]
+  },
+  
+  // Stage 11: TENURE_SELECTION - EMI calculation
+  TENURE_SELECTION: {
+    duration: 3500,
+    loadingText: 'Calculating EMI...',
+    description: 'Computing EMI for different tenures',
+    steps: [
+      'Fetching current interest rates...',
+      'Calculating EMI for 12 months...',
+      'Calculating EMI for 24 months...',
+      'Calculating EMI for 36 months...',
+      'Calculating EMI for 48 months...',
+      'EMI options ready!'
+    ]
+  },
+  
+  // Stage 12: UNDERWRITING - Final decision (critical step)
+  UNDERWRITING: {
+    duration: 8000,
+    loadingText: 'Processing application...',
+    description: 'Risk assessment and eligibility calculation',
+    steps: [
+      'Initiating underwriting engine...',
+      'Analyzing credit history...',
+      'Verifying income details...',
+      'Checking debt-to-income ratio...',
+      'Verifying employment stability...',
+      'Running fraud detection checks...',
+      'Calculating risk score...',
+      'Applying lending policies...',
+      'Generating final decision...'
+    ]
+  },
+  
+  // Stage 13a: SANCTION - Loan approved
+  SANCTION: {
+    duration: 5000,
+    loadingText: 'Generating sanction letter...',
+    description: 'Document generation and digital signing',
+    steps: [
+      'Preparing loan agreement...',
+      'Generating sanction letter...',
+      'Adding terms and conditions...',
+      'Applying digital signature...',
+      'Encrypting document...',
+      'Document ready for download!'
+    ]
+  },
+  
+  // Stage 13b: REJECTION - Loan declined
+  REJECTION: {
+    duration: 3000,
+    loadingText: 'Processing...',
+    description: 'Finalizing application status',
+    steps: [
+      'Finalizing decision...',
+      'Recording rejection reason...',
+      'Updating application status...'
+    ]
+  },
+  
+  // Legacy stage names for backwards compatibility
+  NEEDS_ANALYSIS: {
+    duration: 1000,
+    loadingText: 'Understanding your requirements...',
+    description: 'Analyzing loan needs'
+  },
+  KYC_COLLECTION: {
+    duration: 1200,
+    loadingText: 'Preparing verification...',
+    description: 'Setting up identity verification'
+  },
+  KYC_VERIFICATION: {
+    duration: 2500,
+    loadingText: 'Verifying your identity...',
+    description: 'OTP verification with telecom gateway'
+  },
+  OFFER_CHECK: {
+    duration: 2000,
+    loadingText: 'Checking pre-approved offers...',
+    description: 'Querying offer management system'
+  },
+  CREDIT_CHECK: {
+    duration: 2500,
+    loadingText: 'Fetching credit score from bureau...',
+    description: 'CIBIL/Experian API call simulation'
+  },
+  UNDERWRITING_DECISION: {
+    duration: 3000,
+    loadingText: 'Evaluating your application...',
+    description: 'Risk assessment and eligibility calculation'
+  }
+};
+
+// Helper function to get delay config for a stage
+const getDelayConfig = (stage: string): VerificationDelay => {
+  return VERIFICATION_DELAYS[stage] || {
+    duration: 800,
+    loadingText: 'Processing...',
+    description: 'Default processing'
+  };
+};
+
+// ================================================================================
+// PHASE 10: TONE MANAGEMENT
+// ================================================================================
+// After KYC verification begins, remove emojis and use formal banking language.
+// Greeting and initial stages can be friendly; verification stages must be professional.
+
+const FORMAL_STAGES = [
+  'KYC_VERIFICATION',
+  'OFFER_CHECK', 
+  'CREDIT_CHECK',
+  'INCOME_DOC_UPLOAD',
+  'UNDERWRITING_DECISION',
+  'SANCTION',
+  'REJECTION'
+];
+
+// Remove emojis from text for formal stages
+const sanitizeForFormalTone = (text: string, stage: string): string => {
+  if (!FORMAL_STAGES.includes(stage)) {
+    return text; // Keep emojis for early friendly stages
+  }
+  
+  // Remove common emojis used in responses
+  return text
+    .replace(/[\u{1F600}-\u{1F64F}]/gu, '') // Emoticons
+    .replace(/[\u{1F300}-\u{1F5FF}]/gu, '') // Misc symbols
+    .replace(/[\u{1F680}-\u{1F6FF}]/gu, '') // Transport/map
+    .replace(/[\u{1F1E0}-\u{1F1FF}]/gu, '') // Flags
+    .replace(/[\u{2600}-\u{26FF}]/gu, '')   // Misc symbols
+    .replace(/[\u{2700}-\u{27BF}]/gu, '')   // Dingbats
+    .replace(/👋|🎉|😊|✅|❌|📄|📊|💰|🎯|⚠️|🔍|💼|🏦|📈|📉|🎊|✨|💳|📞|📧/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
 
 interface Message {
   role: 'user' | 'assistant';
@@ -16,11 +371,94 @@ interface LoanDetails {
   monthly_emi: number;
 }
 
-// Helper function to open chat widget
-export const openChatWidget = () => {
+// ================================================================================
+// PHASE 8: CUSTOMER ACQUISITION SIMULATION
+// ================================================================================
+//
+// PURPOSE:
+// --------
+// Simulates how customers arrive at an NBFC loan chatbot through digital marketing:
+// - "AD" = Customer clicked a digital advertisement (Google/Facebook/Instagram ads)
+// - "EMAIL" = Customer opened a pre-approved loan marketing email
+//
+// HOW THIS SIMULATES REAL NBFC DIGITAL FUNNEL:
+// ---------------------------------------------
+// In a real NBFC, customers arrive via:
+// 1. Performance marketing ads (Google, Meta, YouTube)
+// 2. Email campaigns to existing/prospect customers
+// 3. SMS campaigns with loan offers
+// 4. Partner affiliate websites
+//
+// The acquisition_source helps:
+// - Personalize the greeting (ad clicker vs email recipient)
+// - Track conversion funnel for marketing ROI
+// - Adjust conversation tone (new prospect vs existing customer)
+//
+// WHY THIS SATISFIES "LANDING VIA DIGITAL ADS OR EMAILS":
+// --------------------------------------------------------
+// The landing page buttons simulate the exact user journey:
+// - "Apply via Digital Ad" = User clicked loan ad on social media/search
+// - "Apply via Marketing Email" = User clicked CTA in pre-approved email
+//
+// The chatbot then:
+// 1. Auto-opens (simulating ad/email click behavior)
+// 2. Shows contextual greeting based on how they arrived
+// 3. Proceeds with normal loan journey from GREETING stage
+//
+// ================================================================================
+
+// Type definition for acquisition source
+export type AcquisitionSource = 'AD' | 'EMAIL' | null;
+
+// Global state for acquisition source (set by landing page buttons)
+let globalAcquisitionSource: AcquisitionSource = null;
+
+// Helper function to open chat widget with optional acquisition source
+export const openChatWidget = (source?: AcquisitionSource) => {
+  // PHASE 8: Store acquisition source for greeting customization
+  if (source) {
+    globalAcquisitionSource = source;
+    console.log(`📢 PHASE 8: Customer acquired via ${source}`);
+  }
+  
   const chatButton = document.querySelector('[data-chat-trigger]') as HTMLButtonElement;
   if (chatButton) {
     chatButton.click();
+  }
+};
+
+// Helper to get contextual greeting based on acquisition source
+// PHASE 10: Greetings are friendly but professional - no excessive emojis
+const getContextualGreeting = (source: AcquisitionSource): string => {
+  switch (source) {
+    case 'AD':
+      // Customer clicked a digital advertisement
+      // Tone: Warm, professional, clear value proposition
+      return `Hello! Thank you for your interest in Tata Capital Personal Loans.
+
+I can help you check your eligibility in just a few minutes - it's quick and paperwork-free.
+
+To get started, could you tell me:
+1. How much loan amount you're looking for?
+2. The purpose of your loan?`;
+    
+    case 'EMAIL':
+      // Customer opened pre-approved loan marketing email
+      // Tone: Personalized, acknowledge existing relationship
+      return `Welcome to Tata Capital. We're glad you opened your pre-approved loan offer.
+
+Based on your profile, you may already qualify for a special interest rate.
+
+To check your pre-approved amount, please share your registered mobile number.`;
+    
+    default:
+      // Direct website visitor (no specific acquisition source)
+      // Tone: Warm, informative, professional
+      return `Hello and welcome to Tata Capital.
+
+I'm here to help you with your personal loan application. The process is quick and can be completed in just a few minutes.
+
+How may I assist you today?`;
   }
 };
 
@@ -29,8 +467,41 @@ export function ChatWidget() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState<string>('Processing...');
   const [sessionId, setSessionId] = useState<string>(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
-  const [showUpload, setShowUpload] = useState(false);
+  
+  // ================================================================
+  // PHASE 10: Processing state for realistic delays
+  // ================================================================
+  // isProcessing indicates that a verification delay is in progress.
+  // During this time, the input should be disabled and a contextual
+  // loading message should be displayed.
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  // ================================================================
+  // PHASE 10: Idle timeout tracking
+  // ================================================================
+  // Track when the user goes idle for too long
+  const [isIdle, setIsIdle] = useState(false);
+  const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+  
+  // ================================================================
+  // CRITICAL FIX: Stage-driven UI state
+  // ================================================================
+  // Previously: showUpload was a free-floating state that could be toggled
+  // manually, causing it to reappear after verification.
+  //
+  // FIX: Track current_stage from backend and DERIVE showUpload from it.
+  // Upload button appears ONLY when stage === INCOME_DOC_UPLOAD
+  // Once stage advances, upload button cannot reappear.
+  // ================================================================
+  const [currentStage, setCurrentStage] = useState<string>('GREETING');
+  
+  // DERIVED: showUpload is now computed from currentStage, not independently set
+  // This prevents the upload button from reappearing after stage advances
+  const showUpload = currentStage === 'INCOME_DOC_UPLOAD';
+  
   const [showSanctionLetter, setShowSanctionLetter] = useState(false);
   const [loanDetails, setLoanDetails] = useState<LoanDetails | null>(null);
   const [customerName, setCustomerName] = useState<string | null>(null);
@@ -39,8 +510,47 @@ export function ChatWidget() {
   const [currentScenario, setCurrentScenario] = useState<string | null>(null);
   const [pendingDecision, setPendingDecision] = useState<boolean>(false);
   const [decisionType, setDecisionType] = useState<'credit' | 'underwriting' | 'documents' | 'final' | null>(null);
+  // PHASE 5: Session closure state
+  const [sessionClosed, setSessionClosed] = useState(false);
+  const [closureReason, setClosureReason] = useState<string | null>(null);
+  
+  // PHASE 8: Customer acquisition source tracking
+  // Tracks how customer arrived: 'AD' (digital ad) or 'EMAIL' (marketing email)
+  const [acquisitionSource, setAcquisitionSource] = useState<AcquisitionSource>(null);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // ================================================================
+  // PHASE 10: Idle timeout management
+  // ================================================================
+  // Reset idle timer on user activity
+  const resetIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+    }
+    setIsIdle(false);
+    
+    // Only set idle timer if chat is open and not already closed
+    if (isOpen && !sessionClosed) {
+      idleTimerRef.current = setTimeout(() => {
+        setIsIdle(true);
+      }, IDLE_TIMEOUT);
+    }
+  }, [isOpen, sessionClosed]);
+  
+  // Reset idle timer on user interactions
+  useEffect(() => {
+    if (isOpen) {
+      resetIdleTimer();
+    }
+    return () => {
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current);
+      }
+    };
+  }, [isOpen, messages, inputValue, resetIdleTimer]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -50,15 +560,64 @@ export function ChatWidget() {
     scrollToBottom();
   }, [messages]);
 
+  // ================================================================
+  // AUTO-FOCUS INPUT: Always keep cursor in input when chat is open
+  // ================================================================
+  useEffect(() => {
+    if (isOpen && !sessionClosed && inputRef.current) {
+      // Immediate focus
+      inputRef.current.focus();
+      
+      // Also set up interval to keep focus (in case it's lost)
+      const focusInterval = setInterval(() => {
+        if (inputRef.current && document.activeElement !== inputRef.current && !isLoading && !sessionClosed) {
+          inputRef.current.focus();
+        }
+      }, 500);
+      
+      return () => clearInterval(focusInterval);
+    }
+  }, [isOpen, sessionClosed]);
+  
+  // Re-focus after loading completes
+  useEffect(() => {
+    if (isOpen && !isLoading && !sessionClosed && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [isOpen, isLoading, sessionClosed, messages]);
+
   useEffect(() => {
     if (isOpen && messages.length === 0) {
-      // Initial greeting - conversational and warm
-      const greeting: Message = {
-        role: 'assistant',
-        content: 'Hello! Welcome to Tata Capital 😊\n\nI\'m your AI Loan Assistant, and I\'m here to help you get instant pre-approval for a personal loan - the entire process takes less than a minute!\n\n**To get started, please provide:**\n1. Your full name\n2. Your mobile number',
-        timestamp: new Date().toISOString()
-      };
-      setMessages([greeting]);
+      // PHASE 8: Capture acquisition source when chat opens
+      // This reads from the global variable set by landing page buttons
+      const source = globalAcquisitionSource;
+      setAcquisitionSource(source);
+      
+      // Clear global source after capturing (one-time use)
+      globalAcquisitionSource = null;
+      
+      // PHASE 10: Show brief loading state before greeting (simulates connection)
+      setIsLoading(true);
+      setLoadingMessage('Connecting to Tata Capital...');
+      
+      setTimeout(() => {
+        // PHASE 8: Contextual greeting based on acquisition source
+        // Different greeting for ad clicks vs email opens vs direct visits
+        const greetingContent = getContextualGreeting(source);
+        
+        const greeting: Message = {
+          role: 'assistant',
+          content: greetingContent,
+          timestamp: new Date().toISOString()
+        };
+        setMessages([greeting]);
+        setIsLoading(false);
+        
+        // Log acquisition for analytics
+        if (source) {
+          sendAdminEvent('ACQUISITION_SOURCE', { source, timestamp: new Date().toISOString() });
+        }
+      }, 800); // Brief delay to simulate connection
     }
   }, [isOpen]);
 
@@ -172,8 +731,98 @@ export function ChatWidget() {
     setIsLoading(false);
   };
 
+  // PHASE 5: Handle restart after session closure
+  const handleRestart = () => {
+    // Generate new session ID
+    const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setSessionId(newSessionId);
+    
+    // Reset all state
+    setMessages([]);
+    setInputValue('');
+    setIsLoading(false);
+    setIsProcessing(false);
+    setIsIdle(false);
+    setLoadingMessage('Processing...');
+    // CRITICAL FIX: Reset stage to GREETING (showUpload is derived from this)
+    setCurrentStage('GREETING');
+    setShowSanctionLetter(false);
+    setLoanDetails(null);
+    setCustomerName(null);
+    setUploadedDocs([]);
+    setWaitingForDocs(false);
+    setCurrentScenario(null);
+    setPendingDecision(false);
+    setDecisionType(null);
+    setSessionClosed(false);
+    setClosureReason(null);
+    
+    // PHASE 8: Reset acquisition source on restart
+    setAcquisitionSource(null);
+    
+    // PHASE 10: Show connecting state briefly, then greeting
+    setIsLoading(true);
+    setLoadingMessage('Starting new session...');
+    
+    setTimeout(() => {
+      const greeting: Message = {
+        role: 'assistant',
+        content: 'Hello and welcome to Tata Capital.\n\nI\'m here to help you with your personal loan application. The process is quick and can be completed in just a few minutes.\n\nTo get started, please share:\n1. Your full name\n2. Your mobile number',
+        timestamp: new Date().toISOString()
+      };
+      setMessages([greeting]);
+      setIsLoading(false);
+    }, 800);
+  };
+
+  // ================================================================
+  // PHASE 10: Helper to apply realistic processing delay with multi-step messages
+  // ================================================================
+  // This function adds a delay before showing the response to simulate
+  // real banking verification times. Shows multiple loading steps for realism.
+  const applyProcessingDelay = async (stage: string): Promise<void> => {
+    const config = getDelayConfig(stage);
+    // Keep isLoading true so the loading indicator stays visible
+    setIsLoading(true);
+    setIsProcessing(true);
+    
+    // If we have multi-step messages, cycle through them
+    if (config.steps && config.steps.length > 0) {
+      const stepDuration = config.duration / config.steps.length;
+      for (let i = 0; i < config.steps.length; i++) {
+        setLoadingMessage(config.steps[i]);
+        await new Promise(resolve => setTimeout(resolve, stepDuration));
+      }
+    } else {
+      setLoadingMessage(config.loadingText);
+      await new Promise(resolve => setTimeout(resolve, config.duration));
+    }
+    
+    setIsProcessing(false);
+    // Note: isLoading will be set to false by the caller after adding the message
+  };
+
+  // Helper to show multi-step loading for a given stage
+  const showMultiStepLoading = async (stage: string): Promise<void> => {
+    const config = getDelayConfig(stage);
+    
+    if (config.steps && config.steps.length > 0) {
+      const stepDuration = config.duration / config.steps.length;
+      for (let i = 0; i < config.steps.length; i++) {
+        setLoadingMessage(config.steps[i]);
+        await new Promise(resolve => setTimeout(resolve, stepDuration));
+      }
+    } else {
+      setLoadingMessage(config.loadingText);
+      await new Promise(resolve => setTimeout(resolve, config.duration));
+    }
+  };
+
   const sendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim() || isLoading || isProcessing) return;
+    
+    // PHASE 10: Reset idle timer on user activity
+    resetIdleTimer();
 
     const userMessage: Message = {
       role: 'user',
@@ -185,13 +834,18 @@ export function ChatWidget() {
     const currentInput = inputValue;
     setInputValue('');
     setIsLoading(true);
+    
+    // PHASE 10: Set generic loading message initially
+    // Stage-specific messages will be applied AFTER we know the stage from API response
+    setLoadingMessage('Please wait...');
 
     try {
-      // ========== BACKEND API CALL - LET BACKEND HANDLE DEMO MODE ==========
+      // ========== HARD RESET: USE V3 DETERMINISTIC ENDPOINT ==========
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
       
-      const response = await fetch('http://localhost:8000/api/chat', {
+      // HARD RESET: Use /api/v3/chat for deterministic flow
+      const response = await fetch('http://localhost:8000/api/v3/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -214,17 +868,32 @@ export function ChatWidget() {
       if (data.session_id) {
         setSessionId(data.session_id);
       }
+      
+      // ================================================================
+      // PHASE 10: Apply realistic processing delay based on stage
+      // ================================================================
+      // Different stages require different "verification times" to feel real.
+      // This delay is INTENTIONAL - instant responses feel fake in banking.
+      const newStage = data.conversation_stage || data.admin_data?.stage || currentStage;
+      
+      // Use the new stage for delay - this is the stage we're ENTERING
+      // NOT the stage we came from. This way loading messages match what's being done.
+      const delayStage = newStage;
+      
+      // Apply the delay with contextual loading message for the NEW stage
+      await applyProcessingDelay(delayStage);
 
       // Get response text from API
       const responseText = data.response || 'I received your message but got an empty response.';
 
-      // Clean and format the response text
-      const cleanText = (text: string): string => {
-        return text
+      // ================================================================
+      // PHASE 10: Clean and format response with tone adjustment
+      // ================================================================
+      // For formal stages (post-KYC), remove emojis and use banking language
+      const cleanText = (text: string, stage: string): string => {
+        let cleaned = text
           // Remove bold markers
           .replace(/\*\*/g, '')
-          // Remove emoji and special characters but keep basic punctuation
-          .replace(/[👋🎉🌟💰📈⏰💳📊💵⬇️😊😄⚠️🤔💪✅🎯😅🚀📄📎✋💬]/g, '')
           // Remove bullet points and replace with clean format
           .replace(/•/g, '')
           // Remove typing indicators
@@ -236,10 +905,15 @@ export function ChatWidget() {
           // Clean up multiple newlines
           .replace(/\n\s*\n\s*\n/g, '\n\n')
           .trim();
+        
+        // PHASE 10: Remove emojis for formal stages
+        cleaned = sanitizeForFormalTone(cleaned, stage);
+        
+        return cleaned;
       };
 
-      // PHASE 7: Display the response directly
-      const cleanedResponse = cleanText(responseText);
+      // Clean response with stage-appropriate tone
+      const cleanedResponse = cleanText(responseText, newStage);
       if (cleanedResponse) {
         const botMessage: Message = {
           role: 'assistant',
@@ -250,19 +924,16 @@ export function ChatWidget() {
         setMessages(prev => [...prev, botMessage]);
       }
       
-      // Debug: Log the response data
-      console.log('📊 API Response:', {
-        show_upload: data.show_upload,
-        show_sanction_letter: data.show_sanction_letter,
-        decision: data.decision
-      });
-      
-      if (data.show_upload) {
-        console.log('✅ Setting showUpload to TRUE');
-        setShowUpload(true);
-      } else {
-        console.log('❌ show_upload is FALSE or undefined');
+      // ================================================================
+      // CRITICAL FIX: Update currentStage from backend response
+      // showUpload is DERIVED from currentStage, not set directly
+      // Backend sends "conversation_stage", we store it as currentStage
+      // ================================================================
+      if (newStage) {
+        setCurrentStage(newStage);
       }
+      // Note: showUpload is now derived: showUpload = (currentStage === 'INCOME_DOC_UPLOAD')
+      // No more setShowUpload(true/false) - it's automatic!
       
       if (data.show_sanction_letter) {
         setShowSanctionLetter(true);
@@ -271,6 +942,12 @@ export function ChatWidget() {
       
       if (data.customer_name) {
         setCustomerName(data.customer_name);
+      }
+
+      // PHASE 5: Handle session closure
+      if (data.session_closed) {
+        setSessionClosed(true);
+        setClosureReason(data.closure_reason || 'COMPLETED');
       }
 
       // OLD FRONTEND SCRIPTED DEMO CODE - COMMENTED OUT SINCE BACKEND HANDLES THIS
@@ -422,7 +1099,7 @@ export function ChatWidget() {
         // Step 10: Document Request - WAIT FOR ACTUAL UPLOADS
         await addBotMessage(`📄 Verification Agent: ${name}, to process your application for ₹8 lakhs, we need to verify your income.\n\nPlease upload ALL 3 documents:\n1️⃣ Latest Salary Slip (November 2025)\n2️⃣ Bank Statement (Last 6 months)\n3️⃣ PAN Card copy\n\nClick the upload button below to select each document.`, 3000);
         
-        setShowUpload(true);
+        setCurrentStage('INCOME_DOC_UPLOAD');  // CRITICAL FIX: stage-driven upload
         setWaitingForDocs(true);
         setUploadedDocs([]);
         setIsLoading(false);
@@ -521,7 +1198,7 @@ export function ChatWidget() {
         
         // Step 6.5: Request Documents for High-Risk Case
         await addBotMessage(`💼 Sales Agent: ${name}, due to the concerns in your credit report, we need to verify your documents before proceeding.\n\n📎 Please upload 2 documents:\n1. PAN Card\n2. Latest CIBIL Report\n\nUse the upload button below. ⬇️`, 2500);
-        setShowUpload(true);
+        setCurrentStage('INCOME_DOC_UPLOAD');  // CRITICAL FIX: stage-driven upload
         setWaitingForDocs(true);
         setUploadedDocs([]);
         setIsLoading(false);
@@ -559,23 +1236,29 @@ export function ChatWidget() {
     }
   };
 
+  // Note: handleRestart is defined earlier in the component (PHASE 5)
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // PHASE 10: Reset idle timer on file upload
+    resetIdleTimer();
 
     // Add uploaded document to tracking
     const newDocs = [...uploadedDocs, file.name];
     setUploadedDocs(newDocs);
     
-    // Show upload confirmation message
+    // Show upload confirmation message (professional format, no emoji)
     const uploadMsg: Message = {
       role: 'user',
-      content: `📎 Uploaded: ${file.name}`,
+      content: `Document uploaded: ${file.name}`,
       timestamp: new Date().toISOString()
     };
     setMessages(prev => [...prev, uploadMsg]);
     
     setIsLoading(true);
+    setLoadingMessage('Uploading document...');
     
     try {
       // Send file to backend
@@ -623,27 +1306,40 @@ export function ChatWidget() {
         setMessages(prev => [...prev, botMessage]);
       }
       
-      // Check if we need to continue showing upload or proceed
-      if (data.continue_upload) {
-        setShowUpload(true);
-      } else {
-        setShowUpload(false);
-        
-        // If final response, show sanction letter
-        if (data.show_sanction_letter) {
-          setShowSanctionLetter(true);
-          setLoanDetails(data.loan_details);
-        }
+      // ================================================================
+      // CRITICAL FIX: Update stage from upload response
+      // showUpload is DERIVED from currentStage, not manually toggled
+      // ================================================================
+      console.log('📤 Upload Response:', {
+        current_stage: data.current_stage,
+        show_upload: data.show_upload,
+        show_sanction_letter: data.show_sanction_letter,
+        document_verified: data.document_verified
+      });
+      
+      if (data.current_stage) {
+        console.log(`📍 STAGE UPDATE (upload): ${currentStage} → ${data.current_stage}`);
+        setCurrentStage(data.current_stage);
+        // showUpload is now automatically derived from currentStage
+        // No need to manually toggle - once stage advances, upload disappears!
+      }
+      
+      // Handle sanction letter display
+      if (data.show_sanction_letter) {
+        setShowSanctionLetter(true);
+        setLoanDetails(data.loan_details);
       }
       
     } catch (error) {
       console.error('Upload error:', error);
+      // PHASE 10: Professional error message without emoji
       const errorMsg: Message = {
         role: 'assistant',
-        content: `✅ Document ${newDocs.length} received: ${file.name}\n\nPlease upload the remaining documents.`,
+        content: `Document ${newDocs.length} received: ${file.name}\n\nPlease upload the remaining documents.`,
         timestamp: new Date().toISOString()
       };
       setMessages(prev => [...prev, errorMsg]);
+      // On error, stay in INCOME_DOC_UPLOAD stage (don't change currentStage)
     }
     
     setIsLoading(false);
@@ -783,7 +1479,8 @@ export function ChatWidget() {
     // Step 10: Verification Agent - Document Request
     await addBotMessage(`📄 Verification Agent: ${customerName}, to proceed with your application for ₹8,00,000, we need to verify your income.\n\nPlease upload the following 3 documents:\n1. Latest salary slip\n2. Last 3 months bank statement\n3. CIBIL report\n\nUse the upload button below to submit each document. ⬇️`, 2500);
     
-    setShowUpload(true);
+    // CRITICAL FIX: Set stage instead of manual toggle - showUpload derived from stage
+    setCurrentStage('INCOME_DOC_UPLOAD');
     setWaitingForDocs(true);
     setUploadedDocs([]);
     setIsLoading(false);
@@ -803,7 +1500,8 @@ export function ChatWidget() {
     
     // Step 6.5: Request Documents for High-Risk Case
     await addBotMessage(`💼 Sales Agent: ${customerName}, due to the concerns in your credit report, we need to verify your documents before proceeding.\n\n📎 Please upload 2 documents:\n1. PAN Card\n2. Latest CIBIL Report\n\nUse the upload button below. ⬇️`, 2500);
-    setShowUpload(true);
+    // CRITICAL FIX: Set stage instead of manual toggle - showUpload derived from stage
+    setCurrentStage('INCOME_DOC_UPLOAD');
     setWaitingForDocs(true);
     setUploadedDocs([]);
     setIsLoading(false);
@@ -812,16 +1510,13 @@ export function ChatWidget() {
   const handleResetChat = async () => {
     if (confirm('Start a new conversation? This will clear the current chat.')) {
       try {
-        // Call backend to reset session
-        const formData = new URLSearchParams();
-        formData.append('session_id', sessionId);
-        
-        await fetch('http://localhost:8000/api/reset-session', {
+        // HARD RESET: Use v3 reset endpoint
+        await fetch('http://localhost:8000/api/v3/reset-session', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Type': 'application/json',
           },
-          body: formData
+          body: JSON.stringify({ session_id: sessionId })
         });
       } catch (error) {
         console.error('Reset error:', error);
@@ -831,7 +1526,8 @@ export function ChatWidget() {
       const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       setMessages([]);
       setSessionId(newSessionId);
-      setShowUpload(false);
+      // CRITICAL FIX: Reset stage instead of manual toggle - showUpload derived from stage
+      setCurrentStage('GREETING');
       setShowSanctionLetter(false);
       setLoanDetails(null);
       setCustomerName(null);
@@ -919,25 +1615,25 @@ export function ChatWidget() {
     doc.setFont('helvetica', 'normal');
     doc.text(`Loan Amount Sanctioned:`, 20, yPos);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Rs. ${loanDetails?.amount.toLocaleString('en-IN')}`, pageWidth - 20, yPos, { align: 'right' });
+    doc.text(`Rs. ${(loanDetails?.amount || 0).toLocaleString('en-IN')}`, pageWidth - 20, yPos, { align: 'right' });
     
     yPos += 6;
     doc.setFont('helvetica', 'normal');
     doc.text(`Annual Interest Rate:`, 20, yPos);
     doc.setFont('helvetica', 'bold');
-    doc.text(`${loanDetails?.interest_rate}% per annum`, pageWidth - 20, yPos, { align: 'right' });
+    doc.text(`${loanDetails?.interest_rate || 0}% per annum`, pageWidth - 20, yPos, { align: 'right' });
     
     yPos += 6;
     doc.setFont('helvetica', 'normal');
     doc.text(`Loan Tenure:`, 20, yPos);
     doc.setFont('helvetica', 'bold');
-    doc.text(`${loanDetails?.tenure_months} months`, pageWidth - 20, yPos, { align: 'right' });
+    doc.text(`${loanDetails?.tenure_months || 0} months`, pageWidth - 20, yPos, { align: 'right' });
     
     yPos += 6;
     doc.setFont('helvetica', 'normal');
     doc.text(`Monthly EMI:`, 20, yPos);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Rs. ${loanDetails?.monthly_emi.toLocaleString('en-IN')}`, pageWidth - 20, yPos, { align: 'right' });
+    doc.text(`Rs. ${(loanDetails?.monthly_emi || 0).toLocaleString('en-IN')}`, pageWidth - 20, yPos, { align: 'right' });
     
     yPos += 6;
     doc.setFont('helvetica', 'normal');
@@ -1019,124 +1715,151 @@ export function ChatWidget() {
 
   return (
     <>
-      {/* Floating Chat Button */}
+      {/* Floating Chat Button - Responsive */}
       {!isOpen && (
-        <div className="fixed bottom-6 right-6 z-[9999]">
+        <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-[9999]">
           <div className="relative">
-            {/* Nudge Tooltip - Horizontal 2-line layout */}
-            <div className="absolute bottom-full right-0 mb-4 bg-white px-5 py-3 rounded-xl shadow-2xl border-2 border-[#004589] w-52">
-              <p className="text-gray-800 text-base font-semibold leading-snug">
+            {/* Nudge Tooltip - Hidden on very small screens */}
+            <div className="absolute bottom-full right-0 mb-3 sm:mb-4 bg-white px-4 sm:px-5 py-2 sm:py-3 rounded-xl shadow-2xl border-2 border-[#004589] w-44 sm:w-52 hidden xs:block">
+              <p className="text-gray-800 text-sm sm:text-base font-semibold leading-snug">
                 Need a loan?<br />
                 Chat with us!
               </p>
             </div>
             
-            {/* Chat Button */}
+            {/* Chat Button - Responsive size */}
             <button
               data-chat-trigger
               onClick={() => setIsOpen(true)}
-              className="bg-[#004589] text-white w-16 h-16 rounded-full shadow-2xl hover:bg-[#003366] transition-all flex items-center justify-center hover:scale-110 border-4 border-yellow-400"
+              className="bg-[#004589] text-white w-14 h-14 sm:w-16 sm:h-16 rounded-full shadow-2xl hover:bg-[#003366] transition-all flex items-center justify-center hover:scale-110 border-3 sm:border-4 border-yellow-400"
             >
-              <MessageCircle className="w-8 h-8" />
+              <MessageCircle className="w-6 h-6 sm:w-8 sm:h-8" />
             </button>
           </div>
         </div>
       )}
 
-      {/* Chat Window - Centered Modal */}
+      {/* Chat Window - Fully Responsive Modal */}
       {isOpen && (
         <>
           {/* Backdrop */}
           <div className="fixed inset-0 bg-black/50 z-[99998]" onClick={() => setIsOpen(false)}></div>
           
-          {/* Centered Chat Window */}
+          {/* Chat Window - Centered Modal */}
           <div 
-            className="bg-white rounded-2xl shadow-2xl border-2 border-gray-300 w-[600px] h-[650px] flex flex-col fixed z-[99999]"
+            className="bg-white rounded-2xl shadow-2xl border-2 border-gray-300 
+                       flex flex-col fixed z-[99999] overflow-hidden"
             style={{
+              width: 'min(450px, 90vw)',
+              height: 'min(550px, 75vh)',
               top: '50%',
               left: '50%',
-              transform: 'translate(-50%, -50%)',
-              maxHeight: '90vh'
+              transform: 'translate(-50%, -50%)'
             }}
           >
               {/* Header */}
-              <div className="bg-gradient-to-r from-[#004589] to-[#0066cc] text-white p-4 rounded-t-2xl flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <img src={tataLogo} alt="Tata Capital" className="h-10 object-contain" />
+              <div className="bg-gradient-to-r from-[#004589] to-[#0066cc] text-white p-3 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <img src={tataLogo} alt="Tata Capital" className="h-8 sm:h-10 object-contain" />
                 <div>
                   <div className="flex items-center gap-2">
-                    <div className="w-2.5 h-2.5 bg-green-400 rounded-full animate-pulse"></div>
-                    <span className="text-lg font-semibold">Tata Capital Assistant</span>
+                    <div className="w-2 h-2 sm:w-2.5 sm:h-2.5 bg-green-400 rounded-full animate-pulse"></div>
+                    <span className="text-base sm:text-lg font-semibold">Tata Capital Assistant</span>
                   </div>
-                  <p className="text-sm opacity-90">AI-Powered Underwriter</p>
+                  <p className="text-xs sm:text-sm opacity-90">AI-Powered Underwriter</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 sm:gap-2">
                 <button
                   onClick={handleResetChat}
-                  className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                  className="p-1.5 sm:p-2 hover:bg-white/20 rounded-lg transition-colors"
                   title="Start New Chat"
                 >
-                  <RotateCcw className="w-5 h-5" />
+                  <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
                 <button
                   onClick={() => setIsOpen(false)}
-                  className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                  className="p-1.5 sm:p-2 hover:bg-white/20 rounded-lg transition-colors"
                 >
-                  <X className="w-6 h-6" />
+                  <X className="w-5 h-5 sm:w-6 sm:h-6" />
                 </button>
               </div>
             </div>
 
-            {/* Chat Content */}
-            <div className="flex-1 p-4 overflow-y-auto bg-gray-50 scroll-smooth" style={{ scrollBehavior: 'smooth' }}>
-              <div className="space-y-4">
+            {/* Chat Content - Responsive padding */}
+            <div className="flex-1 p-3 sm:p-4 overflow-y-auto bg-gradient-to-b from-gray-50 to-gray-100 scroll-smooth" style={{ scrollBehavior: 'smooth' }}>
+              <div className="space-y-4 sm:space-y-5">
                 {messages.map((message, index) => (
-                  <div key={index} className={`flex gap-3 ${message.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                    {/* Avatar */}
+                  <div 
+                    key={index} 
+                    className={`flex gap-2 sm:gap-3 ${message.role === 'user' ? 'flex-row-reverse' : ''}`}
+                    style={{
+                      animation: 'fadeSlideIn 0.3s ease-out forwards',
+                      animationDelay: `${index === messages.length - 1 ? '0.05s' : '0s'}`
+                    }}
+                  >
+                    {/* Avatar - Responsive */}
                     {message.role === 'assistant' && (
-                      <div className="w-8 h-8 bg-[#3B82F6] rounded-full flex items-center justify-center text-white flex-shrink-0">
-                        AI
+                      <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden bg-white border-2 border-blue-500 shadow-md">
+                        {/* Tata Capital Logo */}
+                        <img 
+                          src={tataLogo} 
+                          alt="Tata Capital" 
+                          className="w-6 h-6 sm:w-8 sm:h-8 object-contain"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
                       </div>
                     )}
                     {message.role === 'user' && (
-                      <div className="w-8 h-8 bg-gray-400 rounded-full flex items-center justify-center text-white flex-shrink-0">
-                        U
+                      <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden bg-gradient-to-br from-blue-500 to-blue-600 shadow-md border-2 border-white">
+                        {/* User Profile Icon */}
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" className="w-5 h-5 sm:w-6 sm:h-6">
+                          <path fillRule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clipRule="evenodd" />
+                        </svg>
                       </div>
                     )}
                     
-                    {/* Message Bubble */}
-                    <div className={`max-w-[70%] ${message.role === 'user' ? 'bg-[#3B82F6] text-white' : 'bg-white'} p-4 rounded-xl shadow-md break-words`}>
-                      <p className={`text-sm leading-relaxed font-normal whitespace-pre-wrap ${message.role === 'user' ? 'text-white' : 'text-slate-700'}`}>
+                    {/* Message Bubble - Responsive */}
+                    <div className={`max-w-[85%] sm:max-w-[75%] ${message.role === 'user' 
+                      ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-2xl rounded-tr-sm' 
+                      : 'bg-white border border-gray-100 rounded-2xl rounded-tl-sm'} p-3 sm:p-4 shadow-sm hover:shadow-md transition-shadow duration-200 break-words`}>
+                      <p className={`text-sm leading-relaxed whitespace-pre-wrap ${message.role === 'user' ? 'text-white' : 'text-slate-700'}`}>
                         {message.content}
+                      </p>
+                      {/* Message timestamp - subtle */}
+                      <p className={`text-[9px] sm:text-[10px] mt-1 ${message.role === 'user' ? 'text-blue-200' : 'text-gray-400'}`}>
+                        {new Date(message.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
                       </p>
                     </div>
                   </div>
                 ))}
 
-                {/* Sanction Letter Card */}
+                {/* Sanction Letter Card - Responsive */}
+                {/* PHASE 10: Sanction Letter Card - Professional styling, no emojis */}
                 {showSanctionLetter && loanDetails && (
-                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-500 rounded-lg p-4 animate-fadeIn">
-                    <div className="flex items-center gap-2 mb-3">
-                      <CheckCircle className="w-6 h-6 text-green-600" />
-                      <h4 className="text-green-900">Loan Approved! 🎉</h4>
+                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-500 rounded-lg p-3 sm:p-4 animate-fadeIn">
+                    <div className="flex items-center gap-2 mb-2 sm:mb-3">
+                      <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" />
+                      <h4 className="text-green-900 font-semibold text-sm sm:text-base">Loan Approved</h4>
                     </div>
-                    <div className="space-y-2 text-sm">
+                    <div className="space-y-1.5 sm:space-y-2 text-xs sm:text-sm">
                       <div className="flex justify-between">
                         <span className="text-gray-700">Sanctioned Amount:</span>
-                        <span className="text-gray-900">₹{loanDetails.amount.toLocaleString('en-IN')}</span>
+                        <span className="text-gray-900">₹{(loanDetails.amount || 0).toLocaleString('en-IN')}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-700">Interest Rate:</span>
-                        <span className="text-gray-900">{loanDetails.interest_rate}% p.a.</span>
+                        <span className="text-gray-900">{loanDetails.interest_rate || 0}% p.a.</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-700">Tenure:</span>
-                        <span className="text-gray-900">{loanDetails.tenure_months} months</span>
+                        <span className="text-gray-900">{loanDetails.tenure_months || 0} months</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-gray-700">Monthly EMI:</span>
-                        <span className="text-gray-900">₹{loanDetails.monthly_emi.toLocaleString('en-IN')}</span>
+                        <span className="text-gray-900">₹{(loanDetails.monthly_emi || 0).toLocaleString('en-IN')}</span>
                       </div>
                     </div>
                     <button
@@ -1149,12 +1872,12 @@ export function ChatWidget() {
                   </div>
                 )}
 
-                {/* Decision Buttons */}
+                {/* PHASE 10: Decision Buttons - Professional styling */}
                 {pendingDecision && !isLoading && (
                   <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-500 rounded-lg p-4 animate-fadeIn">
                     <div className="flex items-center gap-2 mb-3">
                       <div className="w-3 h-3 bg-blue-600 rounded-full animate-pulse"></div>
-                      <h4 className="text-blue-900 font-semibold">⚖️ Manual Review Required</h4>
+                      <h4 className="text-blue-900 font-semibold">Manual Review Required</h4>
                     </div>
                     <p className="text-sm text-gray-700 mb-4">
                       {decisionType === 'credit' && 'Credit report retrieved. Please review credit score and history.'}
@@ -1167,35 +1890,45 @@ export function ChatWidget() {
                         onClick={() => handleDecision('accept')}
                         className="flex-1 bg-green-600 text-white py-2.5 rounded-lg flex items-center justify-center gap-2 hover:bg-green-700 transition-colors font-medium"
                       >
-                        ✓ Accept
+                        Accept
                       </button>
                       <button
                         onClick={() => handleDecision('decline')}
                         className="flex-1 bg-red-600 text-white py-2.5 rounded-lg flex items-center justify-center gap-2 hover:bg-red-700 transition-colors font-medium"
                       >
-                        ✗ Decline
+                        Decline
                       </button>
                       <button
                         onClick={() => handleDecision('contact')}
                         className="flex-1 bg-amber-600 text-white py-2.5 rounded-lg flex items-center justify-center gap-2 hover:bg-amber-700 transition-colors font-medium"
                       >
-                        📞 Contact
+                        Contact
                       </button>
                     </div>
                   </div>
                 )}
 
-                {/* Loading Indicator */}
+                {/* PHASE 10: Loading Indicator - Professional, smooth animation with contextual message */}
                 {isLoading && (
                   <div className="flex gap-3">
-                    <div className="w-8 h-8 bg-[#3B82F6] rounded-full flex items-center justify-center text-white flex-shrink-0">
-                      AI
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden bg-white border-2 border-blue-500 shadow-md">
+                      <img 
+                        src={tataLogo} 
+                        alt="Tata Capital" 
+                        className="w-8 h-8 object-contain animate-pulse"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
                     </div>
-                    <div className="bg-white p-3 rounded-lg shadow-sm">
-                      <div className="flex gap-1">
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    <div className="bg-white p-3 rounded-xl shadow-md border border-gray-100">
+                      <div className="flex items-center gap-2">
+                        <div className="flex gap-1">
+                          <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce"></div>
+                          <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                          <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                        </div>
+                        <span className="text-sm text-slate-600 ml-2">{loadingMessage}</span>
                       </div>
                     </div>
                   </div>
@@ -1207,38 +1940,47 @@ export function ChatWidget() {
 
             {/* Input Area */}
             <div className="p-4 border-t border-gray-200 bg-white rounded-b-2xl flex-shrink-0">
-              <div className="mb-3 space-y-2">
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileUpload}
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  className="hidden"
-                />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isLoading}
-                  className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-700 transition-colors disabled:opacity-50 font-semibold shadow-md"
-                >
-                  <Upload className="w-5 h-5" />
-                  📎 Upload Document
-                </button>
-              </div>
+              {/* PHASE 5 + PHASE 10: Show session closed message - Professional tone, no emojis */}
+              {sessionClosed && (
+                <div className="mb-3 p-3 bg-gray-100 rounded-lg text-center">
+                  <p className="text-sm text-gray-600">
+                    {closureReason === 'LOAN_SANCTIONED' 
+                      ? 'This loan application has been completed. Your sanction letter is ready for download.'
+                      : closureReason === 'LOAN_REJECTED'
+                      ? 'This loan application session has ended.'
+                      : 'This session has been closed.'
+                    }
+                  </p>
+                  <button
+                    onClick={handleRestart}
+                    className="mt-2 text-blue-600 hover:text-blue-800 text-xs sm:text-sm font-medium flex items-center justify-center gap-1 mx-auto"
+                  >
+                    <RotateCcw className="w-3 h-3 sm:w-4 sm:h-4" />
+                    Start New Application
+                  </button>
+                </div>
+              )}
+              
+              {/* HARD RESET: Upload button REMOVED - Income from database only */}
               
               <div className="flex gap-2">
                 <input
+                  ref={inputRef}
                   type="text"
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  placeholder="Type your message..."
-                  disabled={isLoading}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:border-[#3B82F6] disabled:bg-gray-100"
+                  placeholder={sessionClosed ? "Session ended" : "Type your message..."}
+                  disabled={isLoading || sessionClosed}
+                  autoFocus
+                  autoComplete="off"
+                  className="flex-1 px-3 sm:px-4 py-2.5 sm:py-3 text-sm sm:text-base border-2 border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-gray-100 transition-all"
+                  style={{ fontSize: '16px' }} /* Prevents iOS zoom */
                 />
                 <button
                   onClick={sendMessage}
-                  disabled={isLoading || !inputValue.trim()}
-                  className="bg-[#3B82F6] text-white p-2 rounded-lg hover:bg-[#2563EB] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={isLoading || !inputValue.trim() || sessionClosed}
+                  className="bg-[#3B82F6] text-white p-2.5 sm:p-3 rounded-xl hover:bg-[#2563EB] transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-w-[44px] min-h-[44px] flex items-center justify-center"
                 >
                   <Send className="w-5 h-5" />
                 </button>

@@ -206,6 +206,28 @@ html {
   animation: fadeIn 0.3s ease-out;
 }
 
+/* AUDIT FIX: Message slide-in animation for chatbot */
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* AUDIT FIX: Pulse animation for loading states */
+@keyframes softPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
 /* Custom scrollbar styles */
 .scrollbar-thin::-webkit-scrollbar {
   width: 6px;
@@ -234,4 +256,139 @@ html {
 
 .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
+}
+
+/* ================================================================================
+   RESPONSIVE SCALING FOR ALL DEVICES
+   ================================================================================
+   Supports: Mobile phones, tablets (iPad), laptops, desktops, TVs
+   ================================================================================
+*/
+
+/* Base responsive settings */
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Fluid typography scaling */
+@media screen and (max-width: 320px) {
+  /* Very small phones */
+  html { font-size: 13px; }
+}
+
+@media screen and (min-width: 321px) and (max-width: 480px) {
+  /* Small phones */
+  html { font-size: 14px; }
+}
+
+@media screen and (min-width: 481px) and (max-width: 768px) {
+  /* Large phones / Small tablets */
+  html { font-size: 15px; }
+}
+
+@media screen and (min-width: 769px) and (max-width: 1024px) {
+  /* Tablets (iPad) */
+  html { font-size: 16px; }
+}
+
+@media screen and (min-width: 1025px) and (max-width: 1440px) {
+  /* Laptops / Small desktops */
+  html { font-size: 16px; }
+}
+
+@media screen and (min-width: 1441px) and (max-width: 1920px) {
+  /* Large desktops / Full HD */
+  html { font-size: 17px; }
+}
+
+@media screen and (min-width: 1921px) and (max-width: 2560px) {
+  /* 2K displays */
+  html { font-size: 18px; }
+}
+
+@media screen and (min-width: 2561px) {
+  /* 4K TVs and large displays */
+  html { font-size: 20px; }
+}
+
+/* Touch device optimizations */
+@media (hover: none) and (pointer: coarse) {
+  /* Touch devices - larger tap targets */
+  button, a, input, select, textarea {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  input[type="text"], input[type="email"], input[type="tel"], textarea {
+    font-size: 16px !important; /* Prevents zoom on iOS */
+  }
+}
+
+/* Safe area insets for notched devices (iPhone X+, etc) */
+@supports (padding: max(0px)) {
+  body {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+    padding-bottom: max(0px, env(safe-area-inset-bottom));
+  }
+}
+
+/* High DPI / Retina display optimizations */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* TV/Large screen optimizations */
+@media screen and (min-width: 1920px) and (min-height: 1080px) {
+  .tv-scale {
+    transform: scale(1.2);
+    transform-origin: top center;
+  }
+}
+
+/* Landscape orientation adjustments */
+@media screen and (orientation: landscape) and (max-height: 500px) {
+  /* Landscape phones - compact mode */
+  .chat-widget-container {
+    max-height: 90vh;
+  }
+}
+
+/* Print styles */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* Reduce motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Container queries for component-level responsiveness */
+.responsive-container {
+  container-type: inline-size;
+}
+
+/* Focus visible for keyboard navigation */
+:focus-visible {
+  outline: 2px solid #3B82F6;
+  outline-offset: 2px;
+}
+
+/* Auto-focus input highlight */
+input:focus, textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
 }

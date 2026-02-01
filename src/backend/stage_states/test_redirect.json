@@ -1,0 +1,60 @@
+{
+  "current_stage": "NEEDS_DISCOVERY",
+  "session_id": "test_redirect",
+  "created_at": "2026-01-30T21:40:43.618407",
+  "last_updated": "2026-01-30T21:40:43.620285",
+  "transition_history": [
+    {
+      "timestamp": "2026-01-30T21:40:43.618409",
+      "event": "SESSION_STARTED",
+      "from_stage": null,
+      "to_stage": "GREETING",
+      "success": true
+    },
+    {
+      "timestamp": "2026-01-30T21:40:43.619207",
+      "event": "USER_GREETED",
+      "from_stage": "GREETING",
+      "to_stage": "NEEDS_DISCOVERY",
+      "success": true,
+      "data": null
+    }
+  ],
+  "user_name": null,
+  "user_mobile": null,
+  "user_pan": null,
+  "user_email": null,
+  "loan_amount": null,
+  "loan_purpose": "haha what up",
+  "loan_tenure_months": 36,
+  "otp_code": null,
+  "otp_sent": false,
+  "otp_verified": false,
+  "otp_attempts": 0,
+  "kyc_verified": false,
+  "is_existing_customer": false,
+  "customer_id": null,
+  "credit_score": null,
+  "monthly_income": null,
+  "pre_approved_limit": 0,
+  "interest_rate": null,
+  "emi_amount": null,
+  "documents_uploaded": [],
+  "documents_verified": false,
+  "loan_status": null,
+  "rejection_reason": null,
+  "sanction_reference": null,
+  "session_closed": false,
+  "closure_reason": null,
+  "conversation_step": "NEEDS_ASK_AMOUNT",
+  "questions_asked": [
+    "GREETING_WELCOME",
+    "NEEDS_ASK_PURPOSE",
+    "NEEDS_ASK_AMOUNT"
+  ],
+  "questions_answered": [
+    "NEEDS_ASK_PURPOSE"
+  ],
+  "city": null,
+  "employment_type": null
+}

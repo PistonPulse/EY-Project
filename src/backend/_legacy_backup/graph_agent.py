@@ -31,6 +31,17 @@ import httpx
 
 from mock_data import MockDataProvider
 from api_client import ExternalAPIClient
+from agent_prompts import (
+    GLOBAL_BANKING_RULES,
+    SALES_AGENT_PROMPT,
+    VERIFICATION_AGENT_PROMPT,
+    UNDERWRITER_AGENT_PROMPT,
+    TRUST_AGENT_PROMPT,
+    DOCUMENT_AGENT_PROMPT,
+    build_agent_prompt,
+    get_prompt_context,
+    format_indian_currency
+)
 
 
 # ==================== API DATA PROVIDER ====================
@@ -603,108 +614,49 @@ def check_visual_forgery(extracted_data: Dict[str, Any]) -> Dict[str, Any]:
 import random
 import string
 
-# Twilio SMS Integration
-try:
-    from twilio.rest import Client as TwilioClient
-    TWILIO_AVAILABLE = True
-except ImportError:
-    TWILIO_AVAILABLE = False
-    print("⚠️ Twilio not installed. SMS OTP will not be sent.")
-
-# Twilio Configuration - Set these in environment variables
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
-TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER", "")  # Your Twilio phone number
-
 # Test users with fixed OTP for testing
 TEST_USERS_OTP = {
-    "9876543210": "123",  # Priya Sharma
-    "9988776655": "123",  # Amit Patel
-    "9123456789": "123",  # Rajesh Kumar
+    "9876543210": "123456",  # Priya Sharma
+    "9988776655": "123456",  # Amit Patel
+    "9123456789": "123456",  # Rajesh Kumar
 }
 
-def send_sms_otp(phone: str, otp: str) -> dict:
+def generate_otp(phone: str, send_sms: bool = False) -> tuple[str, dict]:
     """
-    Send OTP via SMS using Twilio.
+    Generate OTP for phone verification (LOCAL MOCK - no SMS).
+    All OTPs are displayed directly in the chat for demo purposes.
     
-    Args:
-        phone: 10-digit phone number (Indian format)
-        otp: OTP to send
-        
-    Returns:
-        Dict with status and message
-    """
-    result = {
-        "success": False,
-        "message": "",
-        "sid": None
-    }
-    
-    # Check if Twilio is configured
-    if not TWILIO_AVAILABLE:
-        result["message"] = "Twilio SDK not installed"
-        return result
-    
-    if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
-        result["message"] = "Twilio credentials not configured"
-        print("⚠️ Twilio not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER environment variables.")
-        return result
-    
-    try:
-        # Initialize Twilio client
-        client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        
-        # Format phone number for India (+91)
-        formatted_phone = f"+91{phone}" if not phone.startswith("+") else phone
-        
-        # Send SMS
-        message = client.messages.create(
-            body=f"Your Tata Capital loan verification OTP is: {otp}. Valid for 5 minutes. Do not share this OTP with anyone.",
-            from_=TWILIO_PHONE_NUMBER,
-            to=formatted_phone
-        )
-        
-        result["success"] = True
-        result["message"] = f"OTP sent successfully to {formatted_phone[-4:].rjust(10, 'X')}"
-        result["sid"] = message.sid
-        print(f"✅ SMS sent to {formatted_phone[-4:].rjust(10, 'X')} - SID: {message.sid}")
-        
-    except Exception as e:
-        result["message"] = f"Failed to send SMS: {str(e)}"
-        print(f"❌ SMS sending failed: {str(e)}")
-    
-    return result
-
-def generate_otp(phone: str, send_sms: bool = True) -> tuple[str, dict]:
-    """
-    Generate OTP for phone verification.
-    For test users (Priya, Amit, Rajesh), returns fixed OTP "123" (no SMS sent).
-    For other users, generates a random 6-digit OTP and sends via SMS.
+    For test users (Priya, Amit, Rajesh), returns fixed OTP "123456".
+    For other users, generates a random 6-digit OTP.
     
     Args:
         phone: 10-digit phone number
-        send_sms: Whether to send SMS (default True)
+        send_sms: Ignored - SMS is disabled in mock mode
         
     Returns:
-        Tuple of (OTP string, SMS result dict)
+        Tuple of (OTP string, result dict)
     """
-    sms_result = {"success": False, "message": "SMS not sent", "is_test_user": False}
+    result = {
+        "success": True,
+        "message": "OTP generated locally (mock mode)",
+        "is_test_user": False,
+        "is_mock": True
+    }
     
     # Check if this is a test user
     if phone in TEST_USERS_OTP:
-        sms_result["is_test_user"] = True
-        sms_result["message"] = "Test user - fixed OTP 123"
-        return TEST_USERS_OTP[phone], sms_result
+        result["is_test_user"] = True
+        result["message"] = f"Test user - fixed OTP {TEST_USERS_OTP[phone]}"
+        print(f"📱 [MOCK OTP] Test user {phone[-4:].rjust(10, 'X')} - OTP: {TEST_USERS_OTP[phone]}")
+        return TEST_USERS_OTP[phone], result
     
-    # Generate random 6-digit OTP for real users
+    # Generate random 6-digit OTP for all other users
     otp = ''.join(random.choices(string.digits, k=6))
     
-    # Send SMS if requested
-    if send_sms:
-        sms_result = send_sms_otp(phone, otp)
-        sms_result["is_test_user"] = False
+    result["message"] = f"OTP generated: {otp} (mock mode - displayed in chat)"
+    print(f"📱 [MOCK OTP] Generated for {phone[-4:].rjust(10, 'X')} - OTP: {otp}")
     
-    return otp, sms_result
+    return otp, result
 
 def verify_otp(phone: str, entered_otp: str, expected_otp: str) -> bool:
     """
@@ -831,6 +783,41 @@ class GeminiLLM:
         
         response = await self.llm.ainvoke(messages)
         return response.content
+    
+    async def generate_agent_response(self, agent_name: str, state: Dict, 
+                                       user_message: str, 
+                                       conversation_history: List[Dict] = None,
+                                       additional_context: str = "") -> str:
+        """
+        Generate a response using the appropriate agent persona and prompts.
+        
+        Args:
+            agent_name: Name of the agent (sales, verification, underwriting, etc.)
+            state: Current conversation state
+            user_message: The user's message
+            conversation_history: Previous messages
+            additional_context: Any additional context for the response
+            
+        Returns:
+            Generated response string
+        """
+        # Build the full agent prompt with context
+        agent_prompt = build_agent_prompt(agent_name, state)
+        
+        # Add any additional context if provided
+        if additional_context:
+            agent_prompt += f"\n\n**ADDITIONAL CONTEXT:**\n{additional_context}"
+        
+        # Add instruction to respond directly
+        agent_prompt += """
+
+**RESPONSE INSTRUCTION:**
+Based on the above context and the user's message, generate a professional, helpful response.
+Keep it conversational (2-3 sentences max per point).
+Follow all the behavioral guidelines above.
+Respond DIRECTLY as the agent - do not include any meta-commentary."""
+        
+        return await self.generate(agent_prompt, user_message, conversation_history)
     
     async def route(self, system_prompt: str, context: str) -> RoutingDecision:
         """Get structured routing decision from Gemini"""
@@ -1210,12 +1197,12 @@ Analyze the message carefully and choose the MOST appropriate agent."""
 This rate is **non-negotiable** and already reflects a special discount for your excellent credit profile.
 
 **Your Final Offer:**
-- Loan Amount: Rs. {loan_amount:,}
-- Interest Rate: {current_rate}% p.a.
-- Monthly EMI: Rs. {emi:,}
-- Tenure: 36 months
+• Loan Amount: {format_indian_currency(loan_amount)}
+• Interest Rate: {current_rate}% p.a.
+• Monthly EMI: {format_indian_currency(emi)}
+• Tenure: 36 months
 
-Would you like to proceed? This rate is locked for the next 24 hours."""
+Would you like to proceed? This rate is locked for the next 24 hours. 🔒"""
                     log_entry["negotiation_attempt"] = new_count
                     log_entry["message"] = "Max negotiations reached - presenting final offer"
                 
@@ -1237,28 +1224,28 @@ Would you like to proceed? This rate is locked for the next 24 hours."""
                     if new_rate == floor_rate or new_count == max_negotiations:
                         # This is the final offer
                         savings = int((emi - new_emi) * 36) if emi > 0 else 0
-                        state["ai_response"] = f"""Alright {customer_name}, I spoke with my manager and this is the **absolute best** I can do:
+                        state["ai_response"] = f"""Alright {customer_name}, I spoke with my senior manager and this is the **absolute best** we can offer:
 
 **Your Final Offer:**
-- Loan Amount: Rs. {loan_amount:,}
-- **Interest Rate: {new_rate}% p.a.** (reduced from {current_rate}%)
-- **Monthly EMI: Rs. {new_emi:,}**
-- Tenure: 36 months
-- **You Save: Rs. {savings:,}** over the loan tenure
+• Loan Amount: {format_indian_currency(loan_amount)}
+• **Interest Rate: {new_rate}% p.a.** (reduced from {current_rate}%)
+• **Monthly EMI: {format_indian_currency(new_emi)}**
+• Tenure: 36 months
+• **You Save: {format_indian_currency(savings)}** over the loan tenure
 
-This is a **special rate** reserved for premium customers. I cannot reduce it further.
+This is a special rate reserved for premium customers. I cannot reduce it further.
 
-Shall I proceed with the disbursement?"""
+Shall I proceed with the disbursement? 🙏"""
                     else:
                         savings = int((emi - new_emi) * 36) if emi > 0 else 0
-                        state["ai_response"] = f"""I managed to get approval for a small reduction, {customer_name}.
+                        state["ai_response"] = f"""I managed to get approval for a reduction, {customer_name}. 😊
 
 **Your Updated Offer:**
-- Loan Amount: Rs. {loan_amount:,}
-- **Interest Rate: {new_rate}% p.a.** (down from {current_rate}%)
-- **Monthly EMI: Rs. {new_emi:,}**
-- Tenure: 36 months
-- **You Save: Rs. {savings:,}** over the loan tenure
+• Loan Amount: {format_indian_currency(loan_amount)}
+• **Interest Rate: {new_rate}% p.a.** (down from {current_rate}%)
+• **Monthly EMI: {format_indian_currency(new_emi)}**
+• Tenure: 36 months
+• **You Save: {format_indian_currency(savings)}** over the loan tenure
 
 Shall I proceed with this offer?"""
                 else:
@@ -1270,8 +1257,8 @@ This is a **premium rate** that we only offer to customers with exceptional cred
 **Your Offer:**
 - Loan Amount: Rs. {loan_amount:,}
 - Interest Rate: {floor_rate}% p.a. (Best Available)
-- Monthly EMI: Rs. {emi:,}
-- Tenure: 36 months
+• Monthly EMI: {format_indian_currency(emi)}
+• Tenure: 36 months
 
 Would you like to proceed?"""
                 
@@ -1280,87 +1267,87 @@ Would you like to proceed?"""
             # ==================== PROCEED/ACCEPT FLOW ====================
             elif loan_amount > 0 and any(kw in user_msg_lower for kw in proceed_keywords):
                 state["loan_request"]["status"] = "ACCEPTED"
-                state["ai_response"] = f"""Wonderful, {customer_name}! Let me finalize your loan.
+                state["ai_response"] = f"""Wonderful, {customer_name}! Let me finalize your loan. 🎉
 
 **Confirmed Loan Details:**
-- Loan Amount: Rs. {loan_amount:,}
-- Interest Rate: {current_rate}% p.a.
-- Monthly EMI: Rs. {emi:,}
-- Tenure: 36 months
-- First EMI Date: 5th of next month
+• Loan Amount: {format_indian_currency(loan_amount)}
+• Interest Rate: {current_rate}% p.a.
+• Monthly EMI: {format_indian_currency(emi)}
+• Tenure: 36 months
+• First EMI Date: 5th of next month
 
 **Next Steps:**
-1. Please upload your Salary Slip for verification
-2. Once verified, the amount will be disbursed within 24 hours
+📄 Please upload your Salary Slip for verification
+
+Once verified, the amount will be disbursed within 24 hours!
 
 Click the upload button below to proceed."""
                 state["show_upload"] = True
             
             # ==================== UNDERWRITING DECISIONS ====================
             elif underwriting_decision == "REJECT":
-                state["ai_response"] = f"""I understand your interest in a personal loan, {customer_name}. 
+                state["ai_response"] = f"""Thank you for your interest in Tata Capital, {customer_name}.
 
-Unfortunately, after reviewing your application, I'm unable to approve it at this time.
+After careful review, we're unable to approve your loan application at this time.
 
 **Reason:** {underwriting_reason}
 
-**Tips to improve your eligibility:**
-- Work on improving your credit score through timely payments
-- Pay down existing debts to improve your debt-to-income ratio  
-- Consider applying for a smaller loan amount
-- Wait 3-6 months and apply again
+**What you can do:**
+• Review your credit report for any errors
+• Reduce existing debts to improve your profile
+• Re-apply after 6 months with updated financials
 
-Would you like tips on credit improvement?"""
+We'd love to serve you in the future! For assistance, call 1800-209-0088. 🙏"""
             
             elif underwriting_decision == "APPROVE_INSTANT":
-                state["ai_response"] = f"""Fantastic news, {customer_name}!
+                state["ai_response"] = f"""Congratulations, {customer_name}! 🎉
 
-**Your loan of Rs. {loan_amount:,} is INSTANTLY APPROVED!**
+**Your loan of {format_indian_currency(loan_amount)} is INSTANTLY APPROVED!**
 
 **Loan Details:**
-- Amount: Rs. {loan_amount:,}
-- Interest Rate: {current_rate}% per annum  
-- Monthly EMI: Rs. {emi:,}
-- Tenure: 36 months
+• Amount: {format_indian_currency(loan_amount)}
+• Interest Rate: {current_rate}% per annum  
+• Monthly EMI: {format_indian_currency(emi)}
+• Tenure: 36 months
 
 This is a competitive rate based on your excellent credit profile. Shall I proceed with the disbursement?"""
             
             elif underwriting_decision == "APPROVE_WITH_DOCS":
                 emi = loan_request.get("emi", 0)
-                state["ai_response"] = f"""Great news, {customer_name}! 
+                state["ai_response"] = f"""Good news, {customer_name}! 😊
 
 **Your loan is CONDITIONALLY APPROVED!**
 
 **Loan Details:**
-- Amount: Rs. {loan_amount:,}
-- Interest Rate: {current_rate}% per annum  
-- Monthly EMI: Rs. {emi:,}
-- Tenure: 36 months
+• Amount: {format_indian_currency(loan_amount)}
+• Interest Rate: {current_rate}% per annum  
+• Monthly EMI: {format_indian_currency(emi)}
+• Tenure: 36 months
 
 **Condition:** Please upload your salary slip for income verification.
 
 **Reason:** {underwriting_reason}
 
-Shall I proceed? Please upload your salary slip to continue."""
+Shall I proceed? Please upload your salary slip to continue. 📄"""
             
             else:
                 # Standard sales flow - user is greeting or asking general questions
                 # Check if user has shared name/phone yet
                 if not user_profile.get("name") and not user_profile.get("phone"):
                     # New user - ask for identity
-                    state["ai_response"] = f"""Hello! Welcome to Tata Capital!
+                    state["ai_response"] = """Hello! Welcome to Tata Capital! 😊
 
-I'm your AI Loan Assistant, here to help you get **instant pre-approval** for a personal loan!
+I'm here to help you get **instant pre-approval** for a personal loan!
 
 To get started, please share:
-- Your full name
-- Your 10-digit mobile number
+• Your full name
+• Your 10-digit mobile number
 
 This helps me check your eligibility and pre-approved offers!"""
                 elif user_profile.get("name") and not user_profile.get("phone"):
                     # Have name but no phone
                     name = user_profile.get("name")
-                    state["ai_response"] = f"""Nice to meet you, {name}!
+                    state["ai_response"] = f"""Nice to meet you, {name}! 😊
 
 To check your eligibility and any pre-approved offers, I'll need your **10-digit mobile number**.
 
@@ -1371,32 +1358,32 @@ This is completely secure and helps me fetch your profile instantly!"""
                     pre_approved = financial.get("pre_approved_limit", 0)
                     
                     if pre_approved > 0:
-                        state["ai_response"] = f"""Hi {name}! Great to have you here!
+                        state["ai_response"] = f"""Hi {name}! Great to have you here! 😊
 
-I can see you have a **pre-approved loan limit of Rs. {pre_approved:,}**!
+I can see you have a **pre-approved loan limit of {format_indian_currency(pre_approved)}**!
 
 How much would you like to borrow today? Just tell me the amount and I'll get you instant approval!"""
                     else:
                         state["ai_response"] = f"""Hi {name}! How can I help you today?
 
 I can assist you with:
-- Personal loan applications
-- Checking your eligibility
-- EMI calculations
-- Document requirements
+• Personal loan applications
+• Checking your eligibility
+• EMI calculations
+• Document requirements
 
 What would you like to know?"""
                 else:
                     # Fallback for other cases
-                    state["ai_response"] = """Hello! Welcome to Tata Capital!
+                    state["ai_response"] = """Hello! Welcome to Tata Capital! 😊
 
 I'm here to help you with personal loans. To serve you better, could you please share:
-- Your full name
-- Your 10-digit mobile number"""
+• Your full name
+• Your 10-digit mobile number"""
             
         except Exception as e:
             print(f"Sales Agent error: {e}")
-            state["ai_response"] = "Hello! Welcome to Tata Capital! I'm here to help you with your personal loan needs. Could you please share your name and phone number so I can check your eligibility?"
+            state["ai_response"] = "Hello! Welcome to Tata Capital! I'm here to help you with your personal loan needs. Could you please share your name and phone number so I can check your eligibility? 😊"
             log_entry["error"] = str(e)
             log_entry["type"] = "warning"
         
@@ -1519,14 +1506,11 @@ Examples:
                         state["ai_response"] = f"That OTP doesn't match. Please check and try again. You have {remaining} attempt{'s' if remaining > 1 else ''} remaining."
                         return state
             else:
-                # User didn't enter OTP - remind them
+                # User didn't enter OTP - remind them with the stored OTP
                 otp_phone = otp_state.get("otp_phone", "")
-                is_test_user = otp_phone in TEST_USERS_OTP
+                otp_code = otp_state.get("otp_code", "")
                 
-                if is_test_user:
-                    state["ai_response"] = f"Please enter the OTP sent to your phone number ending with {otp_phone[-4:]}. (Test account: Use OTP **123**)"
-                else:
-                    state["ai_response"] = f"Please enter the 6-digit OTP sent to your phone number ending with {otp_phone[-4:]}."
+                state["ai_response"] = f"Please enter the OTP for your phone number ending with {otp_phone[-4:]}.\n\n**Your OTP: {otp_code}**"
                 return state
         
         # Check if user confirmed a pending match - now needs OTP
@@ -1560,13 +1544,12 @@ Examples:
                 }
                 
                 is_test_user = sms_result.get("is_test_user", False)
-                sms_sent = sms_result.get("success", False)
-                log_entry["message"] = f"📱 OTP {'sent via SMS' if sms_sent else 'generated'} for {pending_phone[-4:].rjust(10, 'X')} ({pending_name})" + (" (Test: 123)" if is_test_user else f" - SMS: {sms_result.get('message', 'N/A')}")
+                log_entry["message"] = f"📱 OTP generated for {pending_phone[-4:].rjust(10, 'X')} ({pending_name})" + (" (Test user: 123456)" if is_test_user else f" (Mock mode)")
                 log_entry["type"] = "info"
                 state.setdefault("admin_log", []).append(log_entry)
                 
                 # Show OTP directly in chat for demo purposes
-                state["ai_response"] = f"Great! To verify it's you, {pending_name}, I've sent an OTP to your phone number ending with {pending_phone[-4:]}.\n\n**Your OTP: {otp_code}**\n\nPlease enter the OTP to continue."
+                state["ai_response"] = f"Great! To verify it's you, {pending_name}, I've generated an OTP for your phone number ending with {pending_phone[-4:]}.\n\n**Your OTP: {otp_code}**\n\nPlease enter the OTP to continue."
                 return state
         
         if not customer_data:
@@ -1658,14 +1641,13 @@ Examples:
                                 }
                                 
                                 is_test_user = sms_result.get("is_test_user", False)
-                                sms_sent = sms_result.get("success", False)
                                 log_entry["verification_status"] = "OTP_SENT"
-                                log_entry["message"] = f"📱 OTP {'sent via SMS' if sms_sent else 'generated'} for {phone[-4:].rjust(10, 'X')} ({customer_name})" + (" (Test: 123)" if is_test_user else f" - SMS: {sms_result.get('message', 'N/A')}")
+                                log_entry["message"] = f"📱 OTP generated for {phone[-4:].rjust(10, 'X')} ({customer_name})" + (" (Test user: 123456)" if is_test_user else " (Mock mode)")
                                 log_entry["type"] = "info"
                                 state.setdefault("admin_log", []).append(log_entry)
                                 
                                 # Show OTP directly in chat for demo purposes
-                                state["ai_response"] = f"Hi {customer_name}! I found your profile. To verify it's you, I've sent an OTP to your phone number ending with {phone[-4:]}.\n\n**Your OTP: {otp_code}**\n\nPlease enter the OTP to continue."
+                                state["ai_response"] = f"Hi {customer_name}! I found your profile. To verify it's you, I've generated an OTP for your phone number ending with {phone[-4:]}.\n\n**Your OTP: {otp_code}**\n\nPlease enter the OTP to continue."
                                 return state
                         else:
                             # Phone not in database - this is a new prospect, also need OTP
@@ -1683,15 +1665,13 @@ Examples:
                             }
                             
                             is_test_user = sms_result.get("is_test_user", False)
-                            sms_sent = sms_result.get("success", False)
                             log_entry["verification_status"] = "OTP_SENT_NEW_PROSPECT"
-                            log_entry["message"] = f"📱 OTP {'sent via SMS' if sms_sent else 'generated'} for new prospect {phone[-4:].rjust(10, 'X')}" + (" (Test: 123)" if is_test_user else f" - SMS: {sms_result.get('message', 'N/A')}")
+                            log_entry["message"] = f"📱 OTP generated for new prospect {phone[-4:].rjust(10, 'X')}" + (" (Test user: 123456)" if is_test_user else " (Mock mode)")
                             log_entry["type"] = "info"
-                            log_entry["otp_for_demo"] = otp_code if not sms_sent and not is_test_user else None
                             state.setdefault("admin_log", []).append(log_entry)
                             
                             # Show OTP directly in chat for demo purposes
-                            state["ai_response"] = f"Welcome{', ' + name if name else ''}! To verify your phone number, I've sent an OTP to your number ending with {phone[-4:]}.\n\n**Your OTP: {otp_code}**\n\nPlease enter the OTP to continue."
+                            state["ai_response"] = f"Welcome{', ' + name if name else ''}! To verify your phone number, I've generated an OTP for your number ending with {phone[-4:]}.\n\n**Your OTP: {otp_code}**\n\nPlease enter the OTP to continue."
                             return state
                     
                     # Strategy 2: Fuzzy name match (fallback - only if unique match)
@@ -2118,89 +2098,89 @@ Example: "I am Rahul and my number is 9876543210\""""
     - "I need a loan" -> {"monthly_income": null, "employment_type": null}
     - "my annual income is 12 lakhs" -> {"monthly_income": 100000, "employment_type": "Salaried"}
     - "25 lakhs per annum" -> {"monthly_income": 208333, "employment_type": "Salaried"}
-- "I earn 24 lakh yearly" -> {"monthly_income": 200000, "employment_type": "Salaried"}
-- "my CTC is 18 lakhs PA" -> {"monthly_income": 150000, "employment_type": "Salaried"}
-- "annual salary 30 lakh" -> {"monthly_income": 250000, "employment_type": "Salaried"}
-- "2 lakhs monthly" -> {"monthly_income": 200000, "employment_type": "Salaried"}"""
+    - "I earn 24 lakh yearly" -> {"monthly_income": 200000, "employment_type": "Salaried"}
+    - "my CTC is 18 lakhs PA" -> {"monthly_income": 150000, "employment_type": "Salaried"}
+    - "annual salary 30 lakh" -> {"monthly_income": 250000, "employment_type": "Salaried"}
+    - "2 lakhs monthly" -> {"monthly_income": 200000, "employment_type": "Salaried"}"""
 
-            try:
-                income_response = await self.llm.generate(income_prompt, user_message, [])
+        try:
+            income_response = await self.llm.generate(income_prompt, user_message, [])
+            
+            if "```" in income_response:
+                income_response = income_response.split("```")[1].replace("json", "").strip()
+            
+            income_info = json.loads(income_response)
+            
+            if income_info.get("monthly_income"):
+                # Update financial data
+                state["financial_data"]["monthly_income"] = income_info["monthly_income"]
+                state["financial_data"]["annual_income"] = income_info["monthly_income"] * 12
                 
-                if "```" in income_response:
-                    income_response = income_response.split("```")[1].replace("json", "").strip()
+                if income_info.get("employment_type"):
+                    state["financial_data"]["employment_type"] = income_info["employment_type"]
                 
-                income_info = json.loads(income_response)
+                # Update the lead in the database
+                phone = user_profile.get("phone")
+                if phone:
+                    self.data_provider.update_lead(phone, {
+                        "monthly_income": income_info["monthly_income"],
+                        "employment_type": income_info.get("employment_type")
+                    })
                 
-                if income_info.get("monthly_income"):
-                    # Update financial data
-                    state["financial_data"]["monthly_income"] = income_info["monthly_income"]
-                    state["financial_data"]["annual_income"] = income_info["monthly_income"] * 12
-                    
-                    if income_info.get("employment_type"):
-                        state["financial_data"]["employment_type"] = income_info["employment_type"]
-                    
-                    # Update the lead in the database
-                    phone = user_profile.get("phone")
-                    if phone:
-                        self.data_provider.update_lead(phone, {
-                            "monthly_income": income_info["monthly_income"],
-                            "employment_type": income_info.get("employment_type")
-                        })
-                    
-                    # Assume a default credit score for new prospects (will be updated after PAN verification)
-                    # For now, use a conservative estimate
-                    estimated_credit_score = 700  # Neutral assumption
-                    state["financial_data"]["credit_score"] = estimated_credit_score
-                    
-                    # Calculate pre-approved limit based on income (conservative for new leads)
-                    monthly_income = income_info["monthly_income"]
-                    pre_approved = min(monthly_income * 36, 1000000)  # More conservative for new leads
-                    state["financial_data"]["pre_approved_limit"] = pre_approved
-                    
-                    # Update negotiation rates for new prospect
-                    state["negotiation_state"] = {
-                        "floor_rate": 12.5,
-                        "current_offered_rate": 15.99,
-                        "attempt_count": 0,
-                        "max_attempts": 3
-                    }
-                    
-                    log_entry["income_collected"] = income_info
-                    log_entry["message"] = f"✓ Collected income for new prospect: ₹{monthly_income:,}/month"
-                    log_entry["type"] = "success"
-                    
-                    customer_name = user_profile.get("name", "there")
-                    state["ai_response"] = f"""Thanks {customer_name}! I've noted your monthly income as **₹{monthly_income:,}**.
+                # Assume a default credit score for new prospects (will be updated after PAN verification)
+                # For now, use a conservative estimate
+                estimated_credit_score = 700  # Neutral assumption
+                state["financial_data"]["credit_score"] = estimated_credit_score
+                
+                # Calculate pre-approved limit based on income (conservative for new leads)
+                monthly_income = income_info["monthly_income"]
+                pre_approved = min(monthly_income * 36, 1000000)  # More conservative for new leads
+                state["financial_data"]["pre_approved_limit"] = pre_approved
+                
+                # Update negotiation rates for new prospect
+                state["negotiation_state"] = {
+                    "floor_rate": 12.5,
+                    "current_offered_rate": 15.99,
+                    "attempt_count": 0,
+                    "max_attempts": 3
+                }
+                
+                log_entry["income_collected"] = income_info
+                log_entry["message"] = f"✓ Collected income for new prospect: {format_indian_currency(monthly_income)}/month"
+                log_entry["type"] = "success"
+                
+                customer_name = user_profile.get("name", "there")
+                state["ai_response"] = f"""Thanks {customer_name}! I've noted your monthly income as **{format_indian_currency(monthly_income)}**. 😊
 
-Based on your income, here's what I can offer:
+Based on your income, here's what we can offer:
 
 **Your Eligibility:**
-- **Pre-approved Limit:** Up to Rs. {pre_approved:,}
-- **Interest Rate:** Starting from {state["negotiation_state"]["current_offered_rate"]}% p.a.
+• **Pre-approved Limit:** Up to {format_indian_currency(pre_approved)}
+• **Interest Rate:** Starting from {state["negotiation_state"]["current_offered_rate"]}% p.a.
 
 Just tell me **how much you'd like to borrow** and I'll process your application!"""
-                    
-                    state.setdefault("admin_log", []).append(log_entry)
-                    return state
-                    
-            except Exception as e:
-                print(f"Income extraction error: {e}")
-            
-            # If we still don't have income, ask for it
-            if not monthly_income:
-                customer_name = user_profile.get("name", "there")
-                state["ai_response"] = f"""Hi {customer_name}! To check your loan eligibility, I need to know your income.
-
-**What is your salary/income?** 💰
-
-For example: "My salary is 75,000 per month" or "I earn 25 lakhs per annum"
-
-This helps me calculate the best loan offer for you!"""
                 
-                log_entry["message"] = "New prospect - waiting for income information"
-                log_entry["type"] = "info"
                 state.setdefault("admin_log", []).append(log_entry)
                 return state
+                
+        except Exception as e:
+            print(f"Income extraction error: {e}")
+        
+        # If we still don't have income, ask for it
+        if not monthly_income:
+            customer_name = user_profile.get("name", "there")
+            state["ai_response"] = f"""Hi {customer_name}! To check your loan eligibility, I need to know your income.
+
+**What is your monthly salary/income?** 💰
+
+For example: "My salary is ₹75,000 per month" or "I earn 25 lakhs per annum"
+
+This helps me calculate the best loan offer for you!"""
+            
+            log_entry["message"] = "New prospect - waiting for income information"
+            log_entry["type"] = "info"
+            state.setdefault("admin_log", []).append(log_entry)
+            return state
         
         # EXISTING CUSTOMER OR NEW LEAD WITH DATA - Standard underwriting flow
         # Extract loan amount from message
@@ -2355,47 +2335,47 @@ Please ensure you upload documents that match your registered identity, or conta
         tenure = state.get("loan_request", {}).get("tenure", 36)
         
         if decision == "REJECT":
-            state["ai_response"] = f"""I understand your interest in a personal loan, {name}.
+            state["ai_response"] = f"""Thank you for your interest in Tata Capital, {name}.
 
-Unfortunately, after running our assessment, I'm unable to approve your application at this time.
+After careful review, we're unable to approve your loan application at this time.
 
 **Reason:** {reason}
 
-**Tips to improve your eligibility:**
-- Work on improving your credit score through timely payments
-- Pay down existing debts to improve your debt-to-income ratio
-- Consider applying for a smaller loan amount
-- Wait 3-6 months and apply again
+**What you can do:**
+• Review your credit report for any errors
+• Reduce existing debts to improve your profile
+• Consider a smaller loan amount
+• Re-apply after 6 months with updated financials
 
-Would you like tips on credit improvement?"""
+We'd love to serve you in the future! For assistance, call 1800-209-0088. 🙏"""
             
         elif decision == "APPROVE_INSTANT":
-            state["ai_response"] = f"""Fantastic news, {name}!
+            state["ai_response"] = f"""Congratulations, {name}! 🎉
 
 **Your loan is INSTANTLY APPROVED!**
 
 **Loan Details:**
-- Amount: Rs. {requested_amount:,}{' for ' + purpose if purpose else ''}
-- Interest Rate: {current_rate}% per annum
-- Monthly EMI: Rs. {emi:,}
-- Tenure: {tenure} months
+• Amount: {format_indian_currency(requested_amount)}{' for ' + purpose if purpose else ''}
+• Interest Rate: {current_rate}% per annum
+• Monthly EMI: {format_indian_currency(emi)}
+• Tenure: {tenure} months
 
-This is a competitive rate based on your credit profile. Shall I proceed with the disbursement?"""
+This is a competitive rate based on your excellent credit profile. Shall I proceed with the disbursement?"""
             
         elif decision == "APPROVE_WITH_DOCS":
-            state["ai_response"] = f"""Great news, {name}!
+            state["ai_response"] = f"""Good news, {name}! 😊
 
 **Your loan is CONDITIONALLY APPROVED!**
 
 **Loan Details:**
-- Amount: Rs {requested_amount:,}{' for ' + purpose if purpose else ''}
-- Interest Rate: {current_rate}% per annum
-- Monthly EMI: Rs {emi:,}
-- Tenure: {tenure} months
+• Amount: {format_indian_currency(requested_amount)}{' for ' + purpose if purpose else ''}
+• Interest Rate: {current_rate}% per annum
+• Monthly EMI: {format_indian_currency(emi)}
+• Tenure: {tenure} months
 
 **Condition:** Please upload your salary slip for income verification.
 
-Please upload your salary slip to proceed with the disbursement."""
+📄 Upload your latest salary slip to proceed with disbursement."""
         
         state.setdefault("admin_log", []).append(log_entry)
         return state

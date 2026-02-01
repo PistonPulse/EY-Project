@@ -8,13 +8,18 @@ This module creates FastAPI endpoints that mimic:
 2. CRM Server - Customer KYC data
 3. Offer Engine - Pre-approved loan offers
 
+PRIMARY KEY:
+------------
+mobile_number is the primary customer identifier across all services.
+OTP verification must complete BEFORE any CRM lookup.
+
 Architecture:
     Main Backend (port 8000)
          ↓ HTTP Requests
     External Services Router
-         ├── /external-api/credit-bureau/score  (CIBIL)
-         ├── /external-api/crm/customer/{phone} (CRM)
-         └── /external-api/offers/calculate     (Offer Engine)
+         ├── /external-api/credit-bureau/score          (CIBIL)
+         ├── /external-api/crm/customer/{mobile_number} (CRM)
+         └── /external-api/offers/calculate             (Offer Engine)
 """
 
 from fastapi import APIRouter, HTTPException, status
@@ -57,7 +62,7 @@ class CRMCustomerResponse(BaseModel):
     """Response model for CRM Customer data"""
     customer_id: str
     name: str
-    phone: str
+    mobile_number: str  # Primary identifier
     pan: str
     email: str
     kyc_status: str
@@ -214,41 +219,46 @@ async def get_credit_score(request: CreditBureauRequest):
 # ==================== CRM ENDPOINT ====================
 
 @external_api_router.get(
-    "/crm/customer/{phone}",
+    "/crm/customer/{mobile_number}",
     response_model=CRMCustomerResponse,
     summary="CRM Server API",
     description="""
     Simulates a CRM API call to fetch customer KYC data.
     
     **How it works:**
-    - Takes a phone number as input
+    - Takes a mobile_number as input (primary key)
     - Looks up customer in the mock database
     - Returns full customer profile if found
     - Returns 404 if customer not found
     
+    **OTP Gate:**
+    - This endpoint should only be called AFTER OTP verification
+    - mobile_number is the identity key verified via OTP
+    
     **Real-world equivalent:** Salesforce, internal CRM systems
     """
 )
-async def get_customer_from_crm(phone: str):
+async def get_customer_from_crm(mobile_number: str):
     """
     Fetch customer details from the mock CRM.
     
     Simulates network latency (300ms) to mimic real API calls.
+    Uses mobile_number as primary key for customer lookup.
     """
     print(f"\n🔌 [CRM API] Connecting to Customer Database...")
-    print(f"   📞 Phone: XXXXXX{phone[-4:]}")
+    print(f"   📱 Mobile Number: XXXXXX{mobile_number[-4:]}")
     
     # Simulate network latency
     await asyncio.sleep(0.3)
     
-    # Look up customer
-    customer = CUSTOMER_PROFILES.get(phone)
+    # Look up customer using mobile_number as primary key
+    customer = CUSTOMER_PROFILES.get(mobile_number)
     
     if not customer:
         print(f"   ❌ Customer not found in CRM")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Customer with phone {phone[-4:].rjust(10, 'X')} not found in CRM"
+            detail=f"Customer with mobile_number {mobile_number[-4:].rjust(10, 'X')} not found in CRM"
         )
     
     # Build CRM response
@@ -259,9 +269,9 @@ async def get_customer_from_crm(phone: str):
     print(f"   📊 Risk Category: {behavioral.get('risk_category', 'UNKNOWN')}")
     
     return CRMCustomerResponse(
-        customer_id=f"CRM_{phone[-6:]}",
+        customer_id=f"CRM_{mobile_number[-6:]}",
         name=customer["name"],
-        phone=customer["phone"],
+        mobile_number=customer["mobile_number"],
         pan=customer["pan"],
         email=customer.get("email", ""),
         kyc_status="VERIFIED",

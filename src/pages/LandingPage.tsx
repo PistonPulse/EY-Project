@@ -1,16 +1,75 @@
 import { Navbar } from '../components/Navbar';
 import { Footer } from '../components/Footer';
 import { AIChatBanner } from '../components/AIChatBanner';
-import { ChatWidget, openChatWidget } from '../components/ChatWidget';
-import { Zap, FileText, Percent, Shield, Clock, Award, TrendingUp, Users, Briefcase, Home, Building2, Car } from 'lucide-react';
+import { ChatWidget, openChatWidget, AcquisitionSource } from '../components/ChatWidget';
+import { Zap, FileText, Percent, Shield, Clock, Award, TrendingUp, Users, Briefcase, Home, Building2, Car, Mail, MousePointerClick } from 'lucide-react';
 import { ImageWithFallback } from '../components/figma/ImageWithFallback';
 
+// ================================================================================
+// PHASE 8: CUSTOMER ACQUISITION SIMULATION
+// ================================================================================
+//
+// This landing page simulates how customers arrive at an NBFC's loan application
+// through digital marketing channels:
+//
+// 1. DIGITAL AD SIMULATION ("Apply via Digital Ad" button)
+//    - Simulates: Customer clicking a Google/Facebook/Instagram ad
+//    - Real world: User sees ad "Get instant loan at 10.5%" → clicks → lands here
+//    - Chatbot greeting: Acknowledges the ad click, emphasizes quick process
+//
+// 2. MARKETING EMAIL SIMULATION ("Apply via Marketing Email" button)
+//    - Simulates: Customer opening pre-approved loan email and clicking CTA
+//    - Real world: User receives email "You're pre-approved for ₹5L" → clicks → lands here
+//    - Chatbot greeting: Acknowledges existing relationship, mentions pre-approval
+//
+// WHY THIS MATTERS FOR NBFC DEMO:
+// - Shows realistic customer acquisition funnel
+// - Demonstrates personalized greeting based on channel
+// - Mimics actual digital marketing → chatbot flow used by NBFCs
+// ================================================================================
+
 export function LandingPage() {
+  // PHASE 8: Handler for acquisition button clicks
+  const handleAcquisitionClick = (source: AcquisitionSource) => {
+    console.log(`🎯 PHASE 8: Customer clicked "${source}" acquisition button`);
+    openChatWidget(source);
+  };
   return (
     <div className="min-h-screen bg-white">
       <Navbar />
       <AIChatBanner />
       
+      {/* PHASE 8: Customer Acquisition Simulation Panel */}
+      {/* This simulates how customers arrive via digital marketing channels */}
+      <section className="bg-gradient-to-r from-purple-600 to-indigo-600 py-4 px-6">
+        <div className="max-w-7xl mx-auto">
+          <div className="flex flex-col md:flex-row items-center justify-center gap-4 md:gap-8">
+            <div className="text-white text-center md:text-left">
+              <p className="text-sm font-medium opacity-90">🎯 DEMO: Simulate Customer Acquisition</p>
+              <p className="text-xs opacity-75">Choose how you arrived at this loan application</p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button
+                onClick={() => handleAcquisitionClick('AD')}
+                className="group flex items-center gap-2 bg-white/20 hover:bg-white/30 backdrop-blur-sm text-white px-5 py-2.5 rounded-lg transition-all duration-200 border border-white/30 hover:border-white/50 shadow-lg hover:shadow-xl"
+              >
+                <MousePointerClick className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                <span className="font-medium">Apply via Digital Ad</span>
+                <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">Google/Meta</span>
+              </button>
+              <button
+                onClick={() => handleAcquisitionClick('EMAIL')}
+                className="group flex items-center gap-2 bg-white/20 hover:bg-white/30 backdrop-blur-sm text-white px-5 py-2.5 rounded-lg transition-all duration-200 border border-white/30 hover:border-white/50 shadow-lg hover:shadow-xl"
+              >
+                <Mail className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                <span className="font-medium">Apply via Marketing Email</span>
+                <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">Pre-Approved</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Hero Section */}
       <section className="pt-24 pb-16 px-6 bg-gradient-to-b from-blue-50 to-white">
         <div className="max-w-7xl mx-auto">
@@ -27,7 +86,10 @@ export function LandingPage() {
                 Get approved in 5 minutes by our new AI Agent. Zero paperwork, instant disbursal.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 mb-8">
-                <button className="bg-[#3B82F6] text-white px-8 py-4 rounded-lg hover:bg-[#2563EB] transition-colors text-base font-semibold">
+                <button 
+                  onClick={() => handleAcquisitionClick('AD')}
+                  className="bg-[#3B82F6] text-white px-8 py-4 rounded-lg hover:bg-[#2563EB] transition-colors text-base font-semibold"
+                >
                   Check Eligibility Now
                 </button>
                 <button className="border-2 border-[#004589] text-[#004589] px-8 py-4 rounded-lg hover:bg-[#004589] hover:text-white transition-colors text-base font-semibold">
@@ -136,7 +198,7 @@ export function LandingPage() {
                 <li>• Minimal documentation</li>
               </ul>
               <button 
-                onClick={openChatWidget}
+                onClick={() => openChatWidget()}
                 className="w-full bg-[#004589] text-white py-3 rounded-lg hover:bg-[#003366] transition-colors text-base font-semibold"
               >
                 Apply Now
@@ -156,7 +218,7 @@ export function LandingPage() {
                 <li>• Tax benefits available</li>
               </ul>
               <button 
-                onClick={openChatWidget}
+                onClick={() => openChatWidget()}
                 className="w-full bg-[#004589] text-white py-3 rounded-lg hover:bg-[#003366] transition-colors text-base font-semibold"
               >
                 Apply Now
@@ -176,7 +238,7 @@ export function LandingPage() {
                 <li>• Quick processing</li>
               </ul>
               <button 
-                onClick={openChatWidget}
+                onClick={() => openChatWidget()}
                 className="w-full bg-[#004589] text-white py-3 rounded-lg hover:bg-[#003366] transition-colors text-base font-semibold"
               >
                 Apply Now
@@ -321,7 +383,10 @@ export function LandingPage() {
         <div className="max-w-4xl mx-auto text-center text-white">
           <h2 className="text-3xl mb-4">Ready to Get Your Loan?</h2>
           <p className="text-xl mb-8 opacity-90">Chat with our AI assistant now. Takes less than 5 minutes!</p>
-          <button className="bg-white text-[#004589] px-8 py-4 rounded-lg hover:bg-gray-100 transition-colors">
+          <button 
+            onClick={() => handleAcquisitionClick('AD')}
+            className="bg-white text-[#004589] px-8 py-4 rounded-lg hover:bg-gray-100 transition-colors font-semibold"
+          >
             Start Chat Now
           </button>
         </div>
