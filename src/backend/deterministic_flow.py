@@ -544,7 +544,7 @@ Do NOT calculate or show EMI yet - that happens after tenure selection.""",
     FlowStage.TENURE_SELECTION: """Ask them to select their preferred loan tenure from these options: 12, 24, 36, or 48 months.
 Explain: 'Shorter tenure = Higher EMI but less total interest. Longer tenure = Lower EMI but more total interest.'
 After they select, show the calculated EMI for their chosen tenure.""",
-    FlowStage.UNDERWRITING: "Inform them their application is being processed. Say 'We are verifying your details.'",
+    FlowStage.UNDERWRITING: "Inform them application is submitted for underwriting. Ask them to wait while we verify details (approx 10 seconds).",
     FlowStage.SANCTION: """Congratulate them on loan approval and provide sanction details.
 Include: Approved amount, interest rate, selected tenure, and final EMI.
 NEVER mention credit score. Say 'Based on your profile, your loan has been approved.'""",
@@ -945,30 +945,6 @@ class DeterministicFlowController:
             session.offer_shown = True
             logger.info(f"[{session.session_id}] Offer calculated: ₹{session.pre_approved_limit:,.0f}")
         
-        # ================================================================
-        # AUTO-RUN UNDERWRITING when entering UNDERWRITING stage
-        # This prevents getting stuck - underwriting runs immediately
-        # ================================================================
-        if session.current_stage == FlowStage.UNDERWRITING:
-            decision, reason = self._perform_underwriting(session)
-            session.underwriting_result = decision
-            session.rejection_reason = reason if decision == "REJECTED" else None
-            session.underwriting_complete = True
-            logger.info(f"[{session.session_id}] Auto-underwriting: {decision}")
-            
-            # Immediately advance to SANCTION or REJECTION
-            if decision == "APPROVED":
-                session.current_stage = FlowStage.SANCTION
-                session.is_frozen = True
-                session.freeze_reason = "LOAN_SANCTIONED"
-                session.sanction_letter_generated = True
-                logger.info(f"[{session.session_id}] Auto-advanced to SANCTION")
-            else:
-                session.current_stage = FlowStage.REJECTION
-                session.is_frozen = True
-                session.freeze_reason = "LOAN_REJECTED"
-                logger.info(f"[{session.session_id}] Auto-advanced to REJECTION")
-        
         return True, f"Advanced to {session.current_stage.name}"
     
     def get_current_question(self, session: SessionState) -> str:
@@ -1199,14 +1175,17 @@ class DeterministicFlowController:
                 logger.warning(f"[{session.session_id}] Invalid tenure: {tenure}, must be one of {TENURE_OPTIONS}")
                 return False
         
-        # UNDERWRITING: Automatic decision
+        # UNDERWRITING: Require explicit user confirmation to proceed
         if stage == FlowStage.UNDERWRITING:
-            decision, reason = self._perform_underwriting(session)
-            session.underwriting_result = decision
-            session.rejection_reason = reason if decision == "REJECTED" else None
-            session.underwriting_complete = True
-            logger.info(f"[{session.session_id}] Underwriting: {decision}")
-            return True
+            # Check for keywords like "proceed", "continue", "check", "status" OR hidden auto-trigger
+            if '[AUTO_PROCEED]' in message or any(word in message_lower for word in ['proceed', 'continue', 'check', 'status', 'go', 'yes']):
+                decision, reason = self._perform_underwriting(session)
+                session.underwriting_result = decision
+                session.rejection_reason = reason if decision == "REJECTED" else None
+                session.underwriting_complete = True
+                logger.info(f"[{session.session_id}] Underwriting triggered by user/auto: {decision}")
+                return True
+            return False
         
         return False
     
@@ -1683,16 +1662,17 @@ class DeterministicFlowController:
         # ============================================================
         requested_amount = session.loan_amount or 500000
         
-        credit_score, breakdown = calculate_credit_score(
+        credit_score, decision, breakdown = calculate_credit_score(
             monthly_income=session.monthly_income or 50000,
             existing_emi=session.existing_monthly_emi or 0,
             employment_type=session.employment_type or "salaried",
             age=session.user_age or 30,
-            requested_amount=requested_amount
+            loan_amount=requested_amount
         )
         
         session.credit_score = credit_score
         session.credit_score_breakdown = breakdown
+        session.credit_decision = decision
         session.income_source = "USER_PROVIDED"
         
         logger.info(f"[{session.session_id}] Dynamic Credit Score: {credit_score}")
@@ -1703,6 +1683,7 @@ class DeterministicFlowController:
         # ============================================================
         session.pre_approved_limit = calculate_pre_approved_limit(
             monthly_income=session.monthly_income or 50000,
+            existing_emi=session.existing_monthly_emi or 0,
             credit_score=credit_score
         )
         
@@ -1722,25 +1703,25 @@ class DeterministicFlowController:
         # ============================================================
         # STEP 3: Calculate Interest Rate Based on Credit Score
         # ============================================================
-        calculated_rate = calculate_interest_rate(credit_score)
-        session.final_interest_rate = calculated_rate
+        min_rate, max_rate, likely_rate = calculate_interest_rate(credit_score)
+        session.final_interest_rate = likely_rate
         
         # Set range for display
-        session.interest_rate_min = INTEREST_RATE_RANGE["min"]
-        session.interest_rate_max = INTEREST_RATE_RANGE["max"]
+        session.interest_rate_min = min_rate
+        session.interest_rate_max = max_rate
         
         # ============================================================
         # STEP 4: Calculate EMI Options
         # ============================================================
         session.emi_options = self._calculate_emi_options(
             session.pre_approved_limit,
-            calculated_rate
+            likely_rate
         )
         
         # Calculate existing debt from existing EMI
         session.existing_monthly_debt = session.existing_monthly_emi or 0
         
-        logger.info(f"[{session.session_id}] Offer: ₹{session.pre_approved_limit:,.0f} @ {calculated_rate}%")
+        logger.info(f"[{session.session_id}] Offer: ₹{session.pre_approved_limit:,.0f} @ {likely_rate}%")
         logger.info(f"[{session.session_id}] EMI options: {session.emi_options}")
     
     def _fetch_customer_income(self, session: SessionState):
@@ -1881,7 +1862,7 @@ class DeterministicFlowController:
     # - Admin dashboard shows exact same state as backend
     #
     # ================================================================================
-    MIN_CREDIT_SCORE = 700  # STRICT: Below this = auto reject
+    MIN_CREDIT_SCORE = 600  # STRICT: Below this = auto reject (was 700)
     
     def _perform_underwriting(self, session: SessionState) -> Tuple[str, Optional[str]]:
         """
@@ -1892,9 +1873,9 @@ class DeterministicFlowController:
         - Uses session.credit_score directly
         
         RULES (in order):
-        1. Credit score < 700 → REJECT (reason: CREDIT_CRITERIA_NOT_MET)
-        2. Credit score ≥ 700 → continue to amount check
-        3. Requested amount ≤ pre-approved limit → APPROVED
+        1. Credit score < 600 → REJECT (reason: CREDIT_CRITERIA_NOT_MET)
+        2. Credit score 600-699 → CONDITIONAL APPROVAL (Higher Interest Logic applied earlier)
+        3. Credit score ≥ 700 → APPROVED (Best Rates)
         4. Requested amount > pre-approved limit → REJECT (reason: AMOUNT_EXCEEDS_ELIGIBILITY)
         
         CRITICAL: 
@@ -1918,12 +1899,12 @@ class DeterministicFlowController:
             session.credit_score_breakdown = breakdown
             logger.info(f"[{session.session_id}] Late credit score calculation: {credit_score}")
         
-        # RULE 1: Credit score < 700 → REJECT
+        # RULE 1: Credit score < 600 → REJECT
         if session.credit_score < self.MIN_CREDIT_SCORE:
             logger.info(f"[{session.session_id}] REJECTED: Credit score {session.credit_score} < {self.MIN_CREDIT_SCORE}")
             return "REJECTED", "CREDIT_CRITERIA_NOT_MET"
         
-        # RULE 2: Credit score ≥ 700 → continue to amount check
+        # RULE 2: Credit score ≥ 600 → continue to amount check
         logger.info(f"[{session.session_id}] Credit check PASSED: {session.credit_score} >= {self.MIN_CREDIT_SCORE}")
         
         # RULE 3 & 4: Amount eligibility check

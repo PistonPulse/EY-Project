@@ -1,7 +1,8 @@
-import { MessageCircle, X, Send, Upload, Download, CheckCircle, RotateCcw, Clock } from 'lucide-react';
+import { MessageCircle, X, Send, Upload, Download, CheckCircle, RotateCcw, Clock, Eye } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import tataLogo from "../assets/Tata_Capital_Logo-01.jpg";
 import jsPDF from 'jspdf';
+import { SanctionLetter } from './SanctionLetter';
 
 /**
  * ================================================================================
@@ -71,7 +72,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
   // V4 16-STAGE FLOW DELAYS - DYNAMIC CREDIT SCORING EXPERIENCE
   // New stages: INCOME, EXISTING_EMI, DOB for user-provided financial data
   // ================================================================================
-  
+
   // Stage 1: GREETING - Quick welcome
   GREETING: {
     duration: 1500,
@@ -79,7 +80,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
     description: 'Quick connection, friendly start',
     steps: ['Establishing secure connection...', 'Initializing chat session...', 'Connected!']
   },
-  
+
   // Stage 2: PURPOSE - Understanding needs
   PURPOSE: {
     duration: 1800,
@@ -87,7 +88,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
     description: 'Analyzing loan purpose',
     steps: ['Recording your requirement...', 'Analyzing loan category...', 'Purpose noted!']
   },
-  
+
   // Stage 3: AMOUNT - Loan amount collection
   AMOUNT: {
     duration: 1500,
@@ -95,7 +96,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
     description: 'Recording loan amount',
     steps: ['Validating amount format...', 'Checking eligibility range...', 'Amount recorded!']
   },
-  
+
   // Stage 4: CITY - Location collection
   CITY: {
     duration: 1800,
@@ -103,7 +104,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
     description: 'Recording city for serviceability',
     steps: ['Checking branch network...', 'Verifying service coverage...', 'Location verified!']
   },
-  
+
   // Stage 5: EMPLOYMENT_TYPE - Employment verification
   EMPLOYMENT_TYPE: {
     duration: 1500,
@@ -111,7 +112,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
     description: 'Recording employment type',
     steps: ['Recording employment details...', 'Updating customer profile...', 'Details saved!']
   },
-  
+
   // Stage 6: NAME - Customer identification
   NAME: {
     duration: 1200,
@@ -119,7 +120,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
     description: 'Customer name collection',
     steps: ['Validating name format...', 'Saving to profile...']
   },
-  
+
   // Stage 7: MOBILE - Phone number collection & OTP sending
   MOBILE: {
     duration: 4000,
@@ -133,7 +134,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'OTP sent successfully!'
     ]
   },
-  
+
   // Stage 8: OTP - OTP verification (key security step)
   OTP: {
     duration: 4500,
@@ -147,7 +148,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'OTP verified successfully!'
     ]
   },
-  
+
   // Stage 9: INCOME - Monthly income collection (NEW)
   INCOME: {
     duration: 2000,
@@ -160,7 +161,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'Income recorded!'
     ]
   },
-  
+
   // Stage 10: EXISTING_EMI - Existing loan/EMI collection (NEW)
   EXISTING_EMI: {
     duration: 2500,
@@ -173,7 +174,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'Debt profile updated!'
     ]
   },
-  
+
   // Stage 11: DOB - Age/Date of Birth collection (NEW)
   DOB: {
     duration: 1500,
@@ -186,7 +187,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'Age verified!'
     ]
   },
-  
+
   // Stage 12: KYC - PAN verification (important identity step)
   KYC: {
     duration: 6000,
@@ -202,7 +203,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'Identity verification complete!'
     ]
   },
-  
+
   // Stage 13: OFFER_DISCUSSION - Pre-approved offer check (with credit score calculation)
   OFFER_DISCUSSION: {
     duration: 8000,
@@ -220,7 +221,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'Offer ready!'
     ]
   },
-  
+
   // Stage 11: TENURE_SELECTION - EMI calculation
   TENURE_SELECTION: {
     duration: 3500,
@@ -235,7 +236,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'EMI options ready!'
     ]
   },
-  
+
   // Stage 12: UNDERWRITING - Final decision (critical step)
   UNDERWRITING: {
     duration: 8000,
@@ -253,7 +254,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'Generating final decision...'
     ]
   },
-  
+
   // Stage 13a: SANCTION - Loan approved
   SANCTION: {
     duration: 5000,
@@ -268,7 +269,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'Document ready for download!'
     ]
   },
-  
+
   // Stage 13b: REJECTION - Loan declined
   REJECTION: {
     duration: 3000,
@@ -280,7 +281,7 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'Updating application status...'
     ]
   },
-  
+
   // Legacy stage names for backwards compatibility
   NEEDS_ANALYSIS: {
     duration: 1000,
@@ -316,7 +317,14 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
 
 // Helper function to get delay config for a stage
 const getDelayConfig = (stage: string): VerificationDelay => {
-  return VERIFICATION_DELAYS[stage] || {
+  const config = VERIFICATION_DELAYS[stage];
+  if (!config) {
+    console.warn(`⚠️ No delay config found for stage: "${stage}", using fallback`);
+    console.log('Available stages:', Object.keys(VERIFICATION_DELAYS));
+  } else {
+    console.log(`✅ Using delay config for stage: "${stage}" - ${config.loadingText}`);
+  }
+  return config || {
     duration: 800,
     loadingText: 'Processing...',
     description: 'Default processing'
@@ -331,11 +339,10 @@ const getDelayConfig = (stage: string): VerificationDelay => {
 
 const FORMAL_STAGES = [
   'KYC_VERIFICATION',
-  'OFFER_CHECK', 
+  'OFFER_CHECK',
   'CREDIT_CHECK',
   'INCOME_DOC_UPLOAD',
   'UNDERWRITING_DECISION',
-  'SANCTION',
   'REJECTION'
 ];
 
@@ -344,7 +351,7 @@ const sanitizeForFormalTone = (text: string, stage: string): string => {
   if (!FORMAL_STAGES.includes(stage)) {
     return text; // Keep emojis for early friendly stages
   }
-  
+
   // Remove common emojis used in responses
   return text
     .replace(/[\u{1F600}-\u{1F64F}]/gu, '') // Emoticons
@@ -420,7 +427,7 @@ export const openChatWidget = (source?: AcquisitionSource) => {
     globalAcquisitionSource = source;
     console.log(`📢 PHASE 8: Customer acquired via ${source}`);
   }
-  
+
   const chatButton = document.querySelector('[data-chat-trigger]') as HTMLButtonElement;
   if (chatButton) {
     chatButton.click();
@@ -441,7 +448,7 @@ I can help you check your eligibility in just a few minutes - it's quick and pap
 To get started, could you tell me:
 1. How much loan amount you're looking for?
 2. The purpose of your loan?`;
-    
+
     case 'EMAIL':
       // Customer opened pre-approved loan marketing email
       // Tone: Personalized, acknowledge existing relationship
@@ -450,7 +457,7 @@ To get started, could you tell me:
 Based on your profile, you may already qualify for a special interest rate.
 
 To check your pre-approved amount, please share your registered mobile number.`;
-    
+
     default:
       // Direct website visitor (no specific acquisition source)
       // Tone: Warm, informative, professional
@@ -469,7 +476,7 @@ export function ChatWidget() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('Processing...');
   const [sessionId, setSessionId] = useState<string>(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
-  
+
   // ================================================================
   // PHASE 10: Processing state for realistic delays
   // ================================================================
@@ -477,7 +484,7 @@ export function ChatWidget() {
   // During this time, the input should be disabled and a contextual
   // loading message should be displayed.
   const [isProcessing, setIsProcessing] = useState(false);
-  
+
   // ================================================================
   // PHASE 10: Idle timeout tracking
   // ================================================================
@@ -485,7 +492,7 @@ export function ChatWidget() {
   const [isIdle, setIsIdle] = useState(false);
   const idleTimerRef = useRef<NodeJS.Timeout | null>(null);
   const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-  
+
   // ================================================================
   // CRITICAL FIX: Stage-driven UI state
   // ================================================================
@@ -497,11 +504,13 @@ export function ChatWidget() {
   // Once stage advances, upload button cannot reappear.
   // ================================================================
   const [currentStage, setCurrentStage] = useState<string>('GREETING');
-  
+
   // DERIVED: showUpload is now computed from currentStage, not independently set
   // This prevents the upload button from reappearing after stage advances
   const showUpload = currentStage === 'INCOME_DOC_UPLOAD';
-  
+
+
+  const [showLetterModal, setShowLetterModal] = useState(false);
   const [showSanctionLetter, setShowSanctionLetter] = useState(false);
   const [loanDetails, setLoanDetails] = useState<LoanDetails | null>(null);
   const [customerName, setCustomerName] = useState<string | null>(null);
@@ -513,11 +522,11 @@ export function ChatWidget() {
   // PHASE 5: Session closure state
   const [sessionClosed, setSessionClosed] = useState(false);
   const [closureReason, setClosureReason] = useState<string | null>(null);
-  
+
   // PHASE 8: Customer acquisition source tracking
   // Tracks how customer arrived: 'AD' (digital ad) or 'EMAIL' (marketing email)
   const [acquisitionSource, setAcquisitionSource] = useState<AcquisitionSource>(null);
-  
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -531,7 +540,7 @@ export function ChatWidget() {
       clearTimeout(idleTimerRef.current);
     }
     setIsIdle(false);
-    
+
     // Only set idle timer if chat is open and not already closed
     if (isOpen && !sessionClosed) {
       idleTimerRef.current = setTimeout(() => {
@@ -539,7 +548,7 @@ export function ChatWidget() {
       }, IDLE_TIMEOUT);
     }
   }, [isOpen, sessionClosed]);
-  
+
   // Reset idle timer on user interactions
   useEffect(() => {
     if (isOpen) {
@@ -567,18 +576,18 @@ export function ChatWidget() {
     if (isOpen && !sessionClosed && inputRef.current) {
       // Immediate focus
       inputRef.current.focus();
-      
+
       // Also set up interval to keep focus (in case it's lost)
       const focusInterval = setInterval(() => {
         if (inputRef.current && document.activeElement !== inputRef.current && !isLoading && !sessionClosed) {
           inputRef.current.focus();
         }
       }, 500);
-      
+
       return () => clearInterval(focusInterval);
     }
   }, [isOpen, sessionClosed]);
-  
+
   // Re-focus after loading completes
   useEffect(() => {
     if (isOpen && !isLoading && !sessionClosed && inputRef.current) {
@@ -592,19 +601,19 @@ export function ChatWidget() {
       // This reads from the global variable set by landing page buttons
       const source = globalAcquisitionSource;
       setAcquisitionSource(source);
-      
+
       // Clear global source after capturing (one-time use)
       globalAcquisitionSource = null;
-      
+
       // PHASE 10: Show brief loading state before greeting (simulates connection)
       setIsLoading(true);
       setLoadingMessage('Connecting to Tata Capital...');
-      
+
       setTimeout(() => {
         // PHASE 8: Contextual greeting based on acquisition source
         // Different greeting for ad clicks vs email opens vs direct visits
         const greetingContent = getContextualGreeting(source);
-        
+
         const greeting: Message = {
           role: 'assistant',
           content: greetingContent,
@@ -612,7 +621,7 @@ export function ChatWidget() {
         };
         setMessages([greeting]);
         setIsLoading(false);
-        
+
         // Log acquisition for analytics
         if (source) {
           sendAdminEvent('ACQUISITION_SOURCE', { source, timestamp: new Date().toISOString() });
@@ -620,6 +629,34 @@ export function ChatWidget() {
       }, 800); // Brief delay to simulate connection
     }
   }, [isOpen]);
+
+  // ================================================================
+  // AUTO-ADVANCE FOR UNDERWRITING STAGE
+  // ================================================================
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+
+    // Only trigger if we are in UNDERWRITING stage and not currently processing an action
+    // We check !isLoading to ensure we don't trigger while the previous response is still being handled
+    if (currentStage === 'UNDERWRITING' && !isProcessing && !isLoading) {
+      console.log('🔄 Auto-advance: Underwriting stage detected');
+
+      // 1. Trigger the visual animation (8 seconds of steps)
+      // We explicitly call this to show "Analyzing...", "Checking score..." etc.
+      applyProcessingDelay('UNDERWRITING');
+
+      // 2. Set timer to auto-advance AFTER the animation completes
+      // The animation takes ~8s, so we trigger the backend call just after
+      timer = setTimeout(() => {
+        console.log('✅ Auto-advance: Sending [AUTO_PROCEED] trigger');
+        sendMessage('[AUTO_PROCEED]', true); // true = hidden message
+      }, 8500);
+    }
+
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [currentStage]); // Dependency on currentStage ensures it runs when entering the stage
 
   // Helper function to send WebSocket event to admin dashboard
   const sendAdminEvent = (eventType: string, eventData: any) => {
@@ -632,8 +669,8 @@ export function ChatWidget() {
           data: eventData,
           timestamp: new Date().toISOString()
         })
-      }).catch(() => {}); // Silent fail if backend unavailable
-    } catch (e) {}
+      }).catch(() => { }); // Silent fail if backend unavailable
+    } catch (e) { }
   };
 
   // Helper to add bot message with typing delay
@@ -651,9 +688,9 @@ export function ChatWidget() {
   const handleDecision = async (decision: 'accept' | 'decline' | 'contact') => {
     setPendingDecision(false);
     setIsLoading(true);
-    
+
     sendAdminEvent('MANUAL_DECISION', { decision, type: decisionType, customer: customerName });
-    
+
     if (decision === 'accept') {
       await addBotMessage(`✅ Decision recorded: ACCEPTED by underwriter\n\nProceeding to next step...`, 1500);
       // Continue with the flow based on decision type
@@ -678,18 +715,18 @@ export function ChatWidget() {
   // Continue functions after decisions
   const continueAfterCreditDecision = async (approved: boolean) => {
     if (!approved) return;
-    
+
     // Step 7: Master Agent → Underwriting Agent
     await addBotMessage('🔄 Master Agent: Handing over to Underwriting Agent for eligibility assessment...', 1500);
     sendAdminEvent('UNDERWRITING_INITIATED', { customer: customerName, amount: 500000 });
-    
+
     // Step 8: Underwriting Agent - Risk Assessment
     await addBotMessage('📊 Underwriting Agent: Loading risk assessment model...', 1800);
     await addBotMessage('📊 Underwriting Agent: Calculating debt-to-income ratio...', 2000);
     await addBotMessage('📊 Underwriting Agent:\n\n🔸 Requested Amount: ₹5,00,000\n🔸 Pre-approved Limit: ₹20,00,000\n🔸 Credit Score: 785 (Threshold: 700) ✓\n🔸 Monthly Income: ₹1,25,000\n🔸 Existing EMI: ₹18,500\n🔸 Proposed EMI: ₹16,134\n🔸 Total EMI: ₹34,634 (27.7% of income) ✓', 2500);
     await addBotMessage('✅ Underwriting Agent: **RULE A APPLIED**\n\nLoan amount ≤ Pre-approved limit\nCredit score ≥ 700\nEMI ratio < 50%\n\n**RESULT: INSTANT APPROVAL** ✓', 1500);
     sendAdminEvent('UNDERWRITING_APPROVED', { rule: 'A', amount: 500000, limit: 2000000 });
-    
+
     // DECISION POINT 2: Final Approval
     await addBotMessage('⚖️ System: Risk assessment complete. Awaiting final approval...', 1500);
     setDecisionType('final');
@@ -705,11 +742,11 @@ export function ChatWidget() {
 
   const continueAfterFinalDecision = async (approved: boolean) => {
     if (!approved) return;
-    
+
     // Step 9: Master Agent → Sanction Letter Generator
     await addBotMessage('🔄 Master Agent: Approval confirmed! Triggering Sanction Letter Generator...', 900);
     sendAdminEvent('SANCTION_LETTER_GENERATION', { customer: customerName, amount: 500000 });
-    
+
     // Step 10: Sanction Letter Generator
     await addBotMessage('📄 Sanction Letter Generator: Initializing document template...', 1500);
     await addBotMessage('📄 Sanction Letter Generator: Calculating EMI schedule and interest breakdown...', 2000);
@@ -717,7 +754,7 @@ export function ChatWidget() {
     await addBotMessage('📄 Sanction Letter Generator: Applying digital signature and encryption...', 1500);
     await addBotMessage('✅ Sanction Letter Generator: Document ready for download!', 1200);
     sendAdminEvent('LOAN_APPROVED', { amount: 500000, customer: customerName });
-    
+
     // Step 11: Sales Agent - Final Message
     setLoanDetails({
       amount: 500000,
@@ -727,7 +764,7 @@ export function ChatWidget() {
     });
     setShowSanctionLetter(true);
     await addBotMessage(`🎉 Sales Agent: Congratulations, ${customerName}! 🎊\n\nYour Personal Loan has been **APPROVED**!\n\n💰 Loan Amount: ₹5,00,000\n📈 Interest Rate: 10.5% per annum\n📅 Tenure: 36 months\n💳 Monthly EMI: ₹16,134\n📄 Processing Fee: 2% + GST\n⚡ Disbursal: Within 24 hours\n\nYour official sanction letter is ready below. It's valid for 30 days.\n\nWelcome to the Tata Capital family! We're honored to support your home renovation journey. 🏡✨`, 2000);
-    
+
     setIsLoading(false);
   };
 
@@ -736,7 +773,7 @@ export function ChatWidget() {
     // Generate new session ID
     const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     setSessionId(newSessionId);
-    
+
     // Reset all state
     setMessages([]);
     setInputValue('');
@@ -756,14 +793,14 @@ export function ChatWidget() {
     setDecisionType(null);
     setSessionClosed(false);
     setClosureReason(null);
-    
+
     // PHASE 8: Reset acquisition source on restart
     setAcquisitionSource(null);
-    
+
     // PHASE 10: Show connecting state briefly, then greeting
     setIsLoading(true);
     setLoadingMessage('Starting new session...');
-    
+
     setTimeout(() => {
       const greeting: Message = {
         role: 'assistant',
@@ -785,7 +822,7 @@ export function ChatWidget() {
     // Keep isLoading true so the loading indicator stays visible
     setIsLoading(true);
     setIsProcessing(true);
-    
+
     // If we have multi-step messages, cycle through them
     if (config.steps && config.steps.length > 0) {
       const stepDuration = config.duration / config.steps.length;
@@ -797,7 +834,7 @@ export function ChatWidget() {
       setLoadingMessage(config.loadingText);
       await new Promise(resolve => setTimeout(resolve, config.duration));
     }
-    
+
     setIsProcessing(false);
     // Note: isLoading will be set to false by the caller after adding the message
   };
@@ -805,7 +842,7 @@ export function ChatWidget() {
   // Helper to show multi-step loading for a given stage
   const showMultiStepLoading = async (stage: string): Promise<void> => {
     const config = getDelayConfig(stage);
-    
+
     if (config.steps && config.steps.length > 0) {
       const stepDuration = config.duration / config.steps.length;
       for (let i = 0; i < config.steps.length; i++) {
@@ -818,23 +855,25 @@ export function ChatWidget() {
     }
   };
 
-  const sendMessage = async () => {
-    if (!inputValue.trim() || isLoading || isProcessing) return;
-    
+  const sendMessage = async (textOverride?: string, isHidden: boolean = false) => {
+    const textToSend = textOverride || inputValue;
+    if (!textToSend.trim() || (isLoading && !isHidden) || (isProcessing && !isHidden)) return;
+
     // PHASE 10: Reset idle timer on user activity
     resetIdleTimer();
 
-    const userMessage: Message = {
-      role: 'user',
-      content: inputValue,
-      timestamp: new Date().toISOString()
-    };
+    if (!isHidden) {
+      const userMessage: Message = {
+        role: 'user',
+        content: textToSend,
+        timestamp: new Date().toISOString()
+      };
+      setMessages(prev => [...prev, userMessage]);
+      setInputValue('');
+    }
 
-    setMessages(prev => [...prev, userMessage]);
-    const currentInput = inputValue;
-    setInputValue('');
     setIsLoading(true);
-    
+
     // PHASE 10: Set generic loading message initially
     // Stage-specific messages will be applied AFTER we know the stage from API response
     setLoadingMessage('Please wait...');
@@ -843,7 +882,7 @@ export function ChatWidget() {
       // ========== HARD RESET: USE V3 DETERMINISTIC ENDPOINT ==========
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
-      
+
       // HARD RESET: Use /api/v3/chat for deterministic flow
       const response = await fetch('http://localhost:8000/api/v3/chat', {
         method: 'POST',
@@ -851,12 +890,12 @@ export function ChatWidget() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: currentInput,
+          message: textToSend,
           session_id: sessionId
         }),
         signal: controller.signal
       });
-      
+
       clearTimeout(timeoutId);
 
       if (!response.ok) {
@@ -864,23 +903,34 @@ export function ChatWidget() {
       }
 
       const data = await response.json();
-      
+
       if (data.session_id) {
         setSessionId(data.session_id);
       }
-      
+
       // ================================================================
       // PHASE 10: Apply realistic processing delay based on stage
       // ================================================================
       // Different stages require different "verification times" to feel real.
       // This delay is INTENTIONAL - instant responses feel fake in banking.
       const newStage = data.conversation_stage || data.admin_data?.stage || currentStage;
-      
-      // Use the new stage for delay - this is the stage we're ENTERING
-      // NOT the stage we came from. This way loading messages match what's being done.
-      const delayStage = newStage;
-      
-      // Apply the delay with contextual loading message for the NEW stage
+
+      console.log('🔍 Stage debugging:', {
+        conversation_stage: data.conversation_stage,
+        admin_stage: data.admin_data?.stage,
+        currentStage: currentStage,
+        newStage: newStage
+      });
+
+      // FIX: Use CURRENT stage for loading messages, not the new stage.
+      // When the user enters their mobile number (MOBILE stage), we want to show
+      // "Sending OTP..." (MOBILE loading), NOT "Verifying OTP..." (OTP loading).
+      // The loading message should describe what's being DONE with the user's input.
+      const delayStage = currentStage;
+
+      console.log(`📋 Loading message for stage: "${delayStage}" (user was on this stage)`);
+
+      // Apply the delay with contextual loading message for the CURRENT stage
       await applyProcessingDelay(delayStage);
 
       // Get response text from API
@@ -892,23 +942,17 @@ export function ChatWidget() {
       // For formal stages (post-KYC), remove emojis and use banking language
       const cleanText = (text: string, stage: string): string => {
         let cleaned = text
-          // Remove bold markers
-          .replace(/\*\*/g, '')
-          // Remove bullet points and replace with clean format
-          .replace(/•/g, '')
           // Remove typing indicators
           .replace(/\*typing\*/g, '')
           // Remove loading indicators
           .replace(/⏳/g, '')
-          // Clean up multiple spaces
-          .replace(/\s+/g, ' ')
           // Clean up multiple newlines
           .replace(/\n\s*\n\s*\n/g, '\n\n')
           .trim();
-        
+
         // PHASE 10: Remove emojis for formal stages
         cleaned = sanitizeForFormalTone(cleaned, stage);
-        
+
         return cleaned;
       };
 
@@ -920,10 +964,10 @@ export function ChatWidget() {
           content: cleanedResponse,
           timestamp: new Date().toISOString()
         };
-        
+
         setMessages(prev => [...prev, botMessage]);
       }
-      
+
       // ================================================================
       // CRITICAL FIX: Update currentStage from backend response
       // showUpload is DERIVED from currentStage, not set directly
@@ -934,12 +978,12 @@ export function ChatWidget() {
       }
       // Note: showUpload is now derived: showUpload = (currentStage === 'INCOME_DOC_UPLOAD')
       // No more setShowUpload(true/false) - it's automatic!
-      
+
       if (data.show_sanction_letter) {
         setShowSanctionLetter(true);
         setLoanDetails(data.loan_details);
       }
-      
+
       if (data.customer_name) {
         setCustomerName(data.customer_name);
       }
@@ -1211,13 +1255,13 @@ export function ChatWidget() {
     } catch (error: any) {
       console.error('Chat error:', error);
       let errorContent = 'I apologize, but I\'m having trouble connecting to the server. Please try again in a moment.';
-      
+
       if (error.name === 'AbortError') {
         errorContent = 'The request took too long. The AI is processing - please wait a moment and try again.';
       } else if (error.message?.includes('Failed to fetch')) {
         errorContent = 'Cannot connect to the server. Please make sure the backend is running on http://localhost:8000';
       }
-      
+
       const errorMessage: Message = {
         role: 'assistant',
         content: errorContent,
@@ -1248,7 +1292,7 @@ export function ChatWidget() {
     // Add uploaded document to tracking
     const newDocs = [...uploadedDocs, file.name];
     setUploadedDocs(newDocs);
-    
+
     // Show upload confirmation message (professional format, no emoji)
     const uploadMsg: Message = {
       role: 'user',
@@ -1256,24 +1300,24 @@ export function ChatWidget() {
       timestamp: new Date().toISOString()
     };
     setMessages(prev => [...prev, uploadMsg]);
-    
+
     setIsLoading(true);
     setLoadingMessage('Uploading document...');
-    
+
     try {
       // Send file to backend
       const formData = new FormData();
       formData.append('file', file);
       formData.append('session_id', sessionId);
       formData.append('document_count', newDocs.length.toString());
-      
+
       const response = await fetch('http://localhost:8000/api/upload', {
         method: 'POST',
         body: formData,
       });
-      
+
       const data = await response.json();
-      
+
       // Clean and format the response text
       const cleanText = (text: string): string => {
         return text
@@ -1289,23 +1333,23 @@ export function ChatWidget() {
 
       // Split response into parts for gradual display
       const responseParts = data.response.split('\n\n').filter((part: string) => part.trim());
-      
+
       // Display messages gradually
       for (let i = 0; i < responseParts.length; i++) {
         const cleanedPart = cleanText(responseParts[i]);
         if (!cleanedPart) continue;
-        
+
         await new Promise(resolve => setTimeout(resolve, i === 0 ? 500 : 1200));
-        
+
         const botMessage: Message = {
           role: 'assistant',
           content: cleanedPart,
           timestamp: new Date().toISOString()
         };
-        
+
         setMessages(prev => [...prev, botMessage]);
       }
-      
+
       // ================================================================
       // CRITICAL FIX: Update stage from upload response
       // showUpload is DERIVED from currentStage, not manually toggled
@@ -1316,20 +1360,20 @@ export function ChatWidget() {
         show_sanction_letter: data.show_sanction_letter,
         document_verified: data.document_verified
       });
-      
+
       if (data.current_stage) {
         console.log(`📍 STAGE UPDATE (upload): ${currentStage} → ${data.current_stage}`);
         setCurrentStage(data.current_stage);
         // showUpload is now automatically derived from currentStage
         // No need to manually toggle - once stage advances, upload disappears!
       }
-      
+
       // Handle sanction letter display
       if (data.show_sanction_letter) {
         setShowSanctionLetter(true);
         setLoanDetails(data.loan_details);
       }
-      
+
     } catch (error) {
       console.error('Upload error:', error);
       // PHASE 10: Professional error message without emoji
@@ -1341,44 +1385,44 @@ export function ChatWidget() {
       setMessages(prev => [...prev, errorMsg]);
       // On error, stay in INCOME_DOC_UPLOAD stage (don't change currentStage)
     }
-    
+
     setIsLoading(false);
-    
+
     // Reset file input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
-  
+
   const handleAmitDocumentsContinue = async () => {
     if (currentScenario !== 'amit' || uploadedDocs.length !== 3) return;
-    
+
     setIsLoading(true);
     setWaitingForDocs(false);
-    
+
     try {
       // Step 11: Master Agent → Back to Verification
       await addBotMessage('🔄 Master Agent: All 3 documents received. Initiating verification scan...', 1800);
       sendAdminEvent('DOCUMENTS_UPLOADED', { count: 3, customer: customerName });
-      
+
       // Step 12: Verification Agent - Document Analysis
       await addBotMessage('🔍 Verification Agent: Extracting data from salary slip...', 2500);
       await addBotMessage('🔍 Verification Agent: Parsing bank statement transactions...', 2500);
       await addBotMessage('🔍 Verification Agent: Validating PAN card details...', 2000);
       await addBotMessage('✅ Verification Agent: Document verification complete!\n\n💰 Gross Salary: ₹55,000/month\n💰 Net Salary: ₹47,850/month\n🏦 Average Bank Balance: ₹45,000\n✓ Salary credits: Regular (TechLogix)\n✓ PAN: CDEFG5678H (Valid)\n✓ No bounced transactions', 3000);
       sendAdminEvent('DOCUMENT_VERIFIED', { salary: 55000, net: 47850, pan: 'CDEFG5678H' });
-      
+
       // Step 13: Master Agent → Back to Underwriting
       await addBotMessage('🔄 Master Agent: Income verified. Resuming underwriting analysis...', 1800);
-      
+
       // Step 14: Underwriting Agent - EMI Affordability Check
       await addBotMessage('📊 Underwriting Agent: Calculating EMI affordability...', 2500);
       await addBotMessage('📊 Underwriting Agent:\n\n🔸 Net Monthly Income: ₹47,850\n🔸 Existing EMIs: ₹12,000\n🔸 Proposed EMI: ₹25,868\n🔸 Total EMI: ₹37,868\n🔸 EMI Ratio: 79.1% of net income\n\n⚠️ **ALERT: Exceeds 50% threshold!**', 3000);
       await addBotMessage('⚠️ Underwriting Agent: **Cannot approve at current amount**\n\nOur bank representative will call you within 24 hours to discuss:\n• Possible loan amount adjustment\n• Alternative tenure options\n• Co-applicant possibilities\n\nApplication Status: **PENDING MANUAL REVIEW**', 3000);
       sendAdminEvent('UNDERWRITING_MANUAL_REVIEW', { rule: 'B', amount: 800000, reason: 'EMI exceeds threshold' });
-      
+
       await addBotMessage(`💼 Sales Agent: Thank you for your patience, ${customerName}.\n\nYour application is under review due to high EMI burden. Our relationship manager will contact you at 9123456789 within 24 hours to find the best solution.\n\nReference Number: TCPL${Date.now()}\n\nWe appreciate your interest in Tata Capital! 🙏`, 2500);
-      
+
       setIsLoading(false);
     } catch (error) {
       console.error('Error in document continuation:', error);
@@ -1388,39 +1432,39 @@ export function ChatWidget() {
 
   const handleRajeshDocumentsContinue = async () => {
     if (currentScenario !== 'rajesh' || uploadedDocs.length !== 2) return;
-    
+
     setIsLoading(true);
     setWaitingForDocs(false);
-    
+
     try {
       // Step 7: Verification Agent - Document Analysis
       await addBotMessage('🔄 Master Agent: Both documents received. Initiating verification...', 1800);
       sendAdminEvent('DOCUMENTS_UPLOADED', { count: 2, customer: customerName });
-      
+
       await addBotMessage('🔍 Verification Agent: Validating PAN card details...', 2500);
       await addBotMessage('🔍 Verification Agent: Cross-checking with Income Tax database...', 2500);
       await addBotMessage('🚨 Verification Agent: **PAN VALIDATION FAILED**\n\n❌ PAN: ZZZZZ9999Z (INVALID FORMAT)\n❌ Income Tax records: NO MATCH\n❌ PAN-Aadhaar link: NOT FOUND\n🚨 Possible fraudulent document detected', 3500);
       sendAdminEvent('PAN_VALIDATION_FAILED', { pan: 'ZZZZZ9999Z', status: 'INVALID' });
-      
+
       // Step 8: Verification Agent - NPCI Fraud Check
       await addBotMessage('🔍 Verification Agent: Checking NPCI fraud database...', 2500);
       await addBotMessage('🚨 Verification Agent: **NPCI FRAUD ALERT**\n\n⚠️ Phone 9988776655: FLAGGED\n❌ Multiple loan applications across 8 NBFCs in last 30 days\n❌ Identity theft reports: 2 cases\n❌ Suspicious transaction patterns detected\n❌ Linked to known fraud network\n🚨 **RECOMMENDATION: IMMEDIATE REJECTION**', 3500);
       sendAdminEvent('NPCI_FRAUD_ALERT', { phone: '9988776655', fraud_score: 95, networks: 8 });
-      
+
       // Step 9: Master Agent → Underwriting Agent (Escalation)
       await addBotMessage('🔄 Master Agent: **FRAUD DETECTED** - Escalating to Underwriting Agent for final decision...', 1800);
       sendAdminEvent('UNDERWRITING_INITIATED', { customer: customerName, amount: 1500000, risk: 'CRITICAL' });
-      
+
       // Step 10: Underwriting Agent - Risk Assessment
       await addBotMessage('📊 Underwriting Agent: Analyzing risk parameters...', 2500);
       await addBotMessage('📊 Underwriting Agent:\n\n🔸 Requested Amount: ₹15,00,000\n🔸 Credit Score: 350 (Threshold: 700) ❌\n🔸 PAN Status: INVALID ❌\n🔸 NPCI Status: FRAUD FLAGGED ❌\n🔸 Debt History: Multiple defaults ❌\n🔸 Identity Verification: FAILED ❌', 3000);
       await addBotMessage('❌ Underwriting Agent: **RULE C TRIGGERED**\n\nCredit score significantly below 700.\nIdentity verification failed.\nFraud indicators present.\nExisting debt obligations unpaid.\n\n**DECISION: APPLICATION REJECTED**', 3000);
       sendAdminEvent('UNDERWRITING_REJECTED', { rule: 'C', reason: 'Fraud + Credit Score', score: 350 });
-      
+
       // Step 11: Master Agent → Compliance Notification
       await addBotMessage('🔄 Master Agent: Notifying compliance team for regulatory reporting...', 1800);
       sendAdminEvent('FRAUD_DETECTED', { phone: '9988776655', name: customerName, risk: 'HIGH', reason: 'Multiple fraud indicators', rule: 'C' });
-      
+
       // Step 12: Sales Agent - Empathetic Rejection
       await addBotMessage(`I sincerely apologize, ${customerName}, but I'm unable to proceed with your loan application at this time.\n\nOur system has identified some concerns that require further review:\n\n• Credit history concerns\n• Identity verification issues\n• Multiple recent loan applications\n\nFor your security and protection, we recommend:\n\n1. Check your credit report at CIBIL.com\n2. Verify your PAN-Aadhaar linking status\n3. Contact our fraud prevention team if you believe this is an error\n\n📞 Customer Support: 1800-209-4477\n🏢 Visit nearest Tata Capital branch for manual verification\n\nWe take financial security very seriously and appreciate your understanding. 🙏`, 4000);
 
@@ -1435,14 +1479,14 @@ export function ChatWidget() {
     // Step 5: Master Agent → Credit Bureau Check
     await addBotMessage('🔄 Master Agent: Initiating credit bureau verification...', 1500);
     sendAdminEvent('CREDIT_CHECK_INITIATED', { customer: customerName });
-    
+
     // Step 6: Verification Agent - Credit Score Fetch
     await addBotMessage('🔍 Verification Agent: Connecting to CIBIL TransUnion API...', 2000);
     await addBotMessage('🔍 Verification Agent: Authenticating secure connection...', 1800);
     await addBotMessage('🔍 Verification Agent: Querying credit history database...', 2200);
     await addBotMessage('✅ Verification Agent: Credit report received!\n\n📊 Credit Score: 785/900 (EXCELLENT)\n✓ No defaults or late payments\n✓ Credit utilization: 28% (Healthy)\n✓ Active loans: 1 (Car Loan)\n✓ Payment history: 100% on-time', 2500);
     sendAdminEvent('CREDIT_SCORE_RETRIEVED', { score: 785, category: 'EXCELLENT' });
-    
+
     // DECISION POINT 1: Credit Check Review
     await addBotMessage('⚖️ System: Credit verification complete. Awaiting underwriter review...', 1500);
     setDecisionType('credit');
@@ -1454,31 +1498,31 @@ export function ChatWidget() {
     // Step 5: Master Agent → Credit Check
     await addBotMessage('🔄 Master Agent: Proceeding with credit bureau verification...', 1500);
     sendAdminEvent('CREDIT_CHECK_INITIATED', { customer: customerName });
-    
+
     // Step 6: Verification Agent - Credit Report
     await addBotMessage('🔍 Verification Agent: Establishing secure connection to CIBIL...', 2000);
     await addBotMessage('🔍 Verification Agent: Fetching comprehensive credit history...', 2200);
     await addBotMessage('🔍 Verification Agent: Analyzing payment patterns across accounts...', 1800);
     await addBotMessage('⚠️ Verification Agent: Credit report received\n\n📊 Credit Score: 680/900 (FAIR)\n⚠️ Active loans: 3 (Personal + Credit Card + Two-Wheeler)\n⚠️ Credit utilization: 78% (High)\n⚠️ Recent inquiries: 2 in last 3 months\n✓ Payment history: 95% on-time (1 late payment)', 1800);
     sendAdminEvent('CREDIT_SCORE_RETRIEVED', { score: 680, category: 'FAIR' });
-    
+
     // Step 7: Master Agent → Underwriting
     await addBotMessage('🔄 Master Agent: Routing to Underwriting Agent for risk assessment...', 900);
     sendAdminEvent('UNDERWRITING_INITIATED', { customer: customerName, amount: 800000 });
-    
+
     // Step 8: Underwriting Agent - Initial Assessment
     await addBotMessage('📊 Underwriting Agent: Analyzing loan application...', 1200);
     await addBotMessage('📊 Underwriting Agent:\n\n🔸 Requested Amount: ₹8,00,000\n🔸 Credit Score: 680 (Threshold: 700) ⚠️\n🔸 Credit utilization: 78% (High) ⚠️\n🔸 Multiple active loans detected\n🔸 Score below excellent range', 1800);
     await addBotMessage('⚠️ Underwriting Agent: **RULE B TRIGGERED**\n\nCredit score below 700 but above 650.\nHigh credit utilization detected.\nHigh loan amount relative to income.\n\n**ACTION REQUIRED:** Income document verification needed', 1800);
     sendAdminEvent('UNDERWRITING_CONDITIONAL', { rule: 'B', reason: 'Income verification required', amount: 800000 });
-    
+
     // Step 9: Master Agent → Back to Verification (Document Request)
     await addBotMessage('🔄 Master Agent: Requesting income verification documents...', 900);
     sendAdminEvent('DOCUMENT_REQUEST_INITIATED', { customer: customerName, type: 'income_proof' });
-    
+
     // Step 10: Verification Agent - Document Request
     await addBotMessage(`📄 Verification Agent: ${customerName}, to proceed with your application for ₹8,00,000, we need to verify your income.\n\nPlease upload the following 3 documents:\n1. Latest salary slip\n2. Last 3 months bank statement\n3. CIBIL report\n\nUse the upload button below to submit each document. ⬇️`, 2500);
-    
+
     // CRITICAL FIX: Set stage instead of manual toggle - showUpload derived from stage
     setCurrentStage('INCOME_DOC_UPLOAD');
     setWaitingForDocs(true);
@@ -1490,14 +1534,14 @@ export function ChatWidget() {
     // Step 5: Master Agent → Credit Bureau Check
     await addBotMessage('🔄 Master Agent: High loan amount detected. Initiating enhanced verification...', 2000);
     sendAdminEvent('CREDIT_CHECK_INITIATED', { customer: customerName, amount: 1500000 });
-    
+
     // Step 6: Verification Agent - Credit Report Retrieval
     await addBotMessage('🔍 Verification Agent: Connecting to CIBIL database...', 2200);
     await addBotMessage('🔍 Verification Agent: Running comprehensive background check...', 2500);
     await addBotMessage('🔍 Verification Agent: Cross-checking multiple credit bureaus...', 2000);
     await addBotMessage('🚨 Verification Agent: **CRITICAL ALERT - CREDIT REPORT**\n\n📊 Credit Score: 350/900 (VERY POOR)\n🚨 CIBIL Status: HIGH RISK\n❌ Writeoff Accounts: 2\n❌ Settled Accounts: 3\n❌ Active NPA: 1 account\n❌ Legal Proceedings: Pending\n⚠️ Total Outstanding Debt: ₹18,50,000', 3500);
     sendAdminEvent('CREDIT_SCORE_RETRIEVED', { score: 350, category: 'VERY_POOR', risk: 'HIGH' });
-    
+
     // Step 6.5: Request Documents for High-Risk Case
     await addBotMessage(`💼 Sales Agent: ${customerName}, due to the concerns in your credit report, we need to verify your documents before proceeding.\n\n📎 Please upload 2 documents:\n1. PAN Card\n2. Latest CIBIL Report\n\nUse the upload button below. ⬇️`, 2500);
     // CRITICAL FIX: Set stage instead of manual toggle - showUpload derived from stage
@@ -1521,7 +1565,7 @@ export function ChatWidget() {
       } catch (error) {
         console.error('Reset error:', error);
       }
-      
+
       // Reset frontend state
       const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       setMessages([]);
@@ -1548,13 +1592,13 @@ export function ChatWidget() {
     doc.setDrawColor(0, 69, 137);
     doc.setLineWidth(0.5);
     doc.rect(10, 10, pageWidth - 20, 25);
-    
+
     // Company name
     doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(0, 69, 137);
     doc.text('TATA CAPITAL LIMITED', pageWidth / 2, 20, { align: 'center' });
-    
+
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
     doc.text('Corporate Office: One World Centre, Mumbai', pageWidth / 2, 27, { align: 'center' });
@@ -1603,12 +1647,12 @@ export function ChatWidget() {
     doc.setDrawColor(0, 128, 0);
     doc.setLineWidth(0.3);
     doc.rect(15, yPos, pageWidth - 30, 45);
-    
+
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(0, 100, 0);
     doc.text('SANCTIONED LOAN DETAILS', pageWidth / 2, yPos + 7, { align: 'center' });
-    
+
     yPos += 15;
     doc.setFontSize(10);
     doc.setTextColor(0, 0, 0);
@@ -1616,25 +1660,25 @@ export function ChatWidget() {
     doc.text(`Loan Amount Sanctioned:`, 20, yPos);
     doc.setFont('helvetica', 'bold');
     doc.text(`Rs. ${(loanDetails?.amount || 0).toLocaleString('en-IN')}`, pageWidth - 20, yPos, { align: 'right' });
-    
+
     yPos += 6;
     doc.setFont('helvetica', 'normal');
     doc.text(`Annual Interest Rate:`, 20, yPos);
     doc.setFont('helvetica', 'bold');
     doc.text(`${loanDetails?.interest_rate || 0}% per annum`, pageWidth - 20, yPos, { align: 'right' });
-    
+
     yPos += 6;
     doc.setFont('helvetica', 'normal');
     doc.text(`Loan Tenure:`, 20, yPos);
     doc.setFont('helvetica', 'bold');
     doc.text(`${loanDetails?.tenure_months || 0} months`, pageWidth - 20, yPos, { align: 'right' });
-    
+
     yPos += 6;
     doc.setFont('helvetica', 'normal');
     doc.text(`Monthly EMI:`, 20, yPos);
     doc.setFont('helvetica', 'bold');
     doc.text(`Rs. ${(loanDetails?.monthly_emi || 0).toLocaleString('en-IN')}`, pageWidth - 20, yPos, { align: 'right' });
-    
+
     yPos += 6;
     doc.setFont('helvetica', 'normal');
     doc.text(`Processing Fee:`, 20, yPos);
@@ -1657,7 +1701,7 @@ export function ChatWidget() {
       '4. Late payment charges: 2% per month on overdue amount.',
       '5. Loan covered under Credit Life Insurance (optional).'
     ];
-    
+
     terms.forEach(term => {
       const splitTerm = doc.splitTextToSize(term, pageWidth - 30);
       doc.text(splitTerm, 15, yPos);
@@ -1726,7 +1770,7 @@ export function ChatWidget() {
                 Chat with us!
               </p>
             </div>
-            
+
             {/* Chat Button - Responsive size */}
             <button
               data-chat-trigger
@@ -1744,9 +1788,9 @@ export function ChatWidget() {
         <>
           {/* Backdrop */}
           <div className="fixed inset-0 bg-black/50 z-[99998]" onClick={() => setIsOpen(false)}></div>
-          
+
           {/* Chat Window - Centered Modal */}
-          <div 
+          <div
             className="bg-white rounded-2xl shadow-2xl border-2 border-gray-300 
                        flex flex-col fixed z-[99999] overflow-hidden"
             style={{
@@ -1757,8 +1801,8 @@ export function ChatWidget() {
               transform: 'translate(-50%, -50%)'
             }}
           >
-              {/* Header */}
-              <div className="bg-gradient-to-r from-[#004589] to-[#0066cc] text-white p-3 rounded-t-2xl flex items-center justify-between flex-shrink-0">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-[#004589] to-[#0066cc] text-white p-3 rounded-t-2xl flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2 sm:gap-3">
                 <img src={tataLogo} alt="Tata Capital" className="h-8 sm:h-10 object-contain" />
                 <div>
@@ -1790,8 +1834,8 @@ export function ChatWidget() {
             <div className="flex-1 p-3 sm:p-4 overflow-y-auto bg-gradient-to-b from-gray-50 to-gray-100 scroll-smooth" style={{ scrollBehavior: 'smooth' }}>
               <div className="space-y-4 sm:space-y-5">
                 {messages.map((message, index) => (
-                  <div 
-                    key={index} 
+                  <div
+                    key={index}
                     className={`flex gap-2 sm:gap-3 ${message.role === 'user' ? 'flex-row-reverse' : ''}`}
                     style={{
                       animation: 'fadeSlideIn 0.3s ease-out forwards',
@@ -1802,9 +1846,9 @@ export function ChatWidget() {
                     {message.role === 'assistant' && (
                       <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden bg-white border-2 border-blue-500 shadow-md">
                         {/* Tata Capital Logo */}
-                        <img 
-                          src={tataLogo} 
-                          alt="Tata Capital" 
+                        <img
+                          src={tataLogo}
+                          alt="Tata Capital"
                           className="w-6 h-6 sm:w-8 sm:h-8 object-contain"
                           onError={(e) => {
                             e.currentTarget.style.display = 'none';
@@ -1820,23 +1864,69 @@ export function ChatWidget() {
                         </svg>
                       </div>
                     )}
-                    
+
                     {/* Message Bubble - Responsive */}
-                    <div className={`max-w-[85%] sm:max-w-[75%] ${message.role === 'user' 
-                      ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-2xl rounded-tr-sm' 
+                    <div className={`max-w-[85%] sm:max-w-[75%] ${message.role === 'user'
+                      ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-2xl rounded-tr-sm'
                       : 'bg-white border border-gray-100 rounded-2xl rounded-tl-sm'} p-3 sm:p-4 shadow-sm hover:shadow-md transition-shadow duration-200 break-words`}>
-                      <p className={`text-sm leading-relaxed whitespace-pre-wrap ${message.role === 'user' ? 'text-white' : 'text-slate-700'}`}>
-                        {message.content}
-                      </p>
+
+                      {/* Rich Text Formatting for Bot Messages */}
+                      {message.role === 'assistant' ? (
+                        <div className="text-sm leading-relaxed text-slate-700">
+                          {message.content.replace(/\\n/g, '\n').split('\n').map((line, i) => {
+                            // Empty lines are spacers
+                            if (!line.trim()) return <div key={i} className="h-2" />;
+
+                            // Check for list items (bullets, numbers, emojis)
+                            const isList = /^[•\-*]|\d+\.|^📌|^✅|^📊|^💰|^📈|^💳/.test(line.trim());
+
+                            // Check for headers (ends with colon or starts with #)
+                            const isHeader = line.trim().endsWith(':') || line.trim().startsWith('#');
+
+                            if (isList) {
+                              return (
+                                <div key={i} className="flex gap-2 ml-1 mb-1">
+                                  <span className="flex-shrink-0 mt-0.5">{line.trim().substring(0, 2)}</span>
+                                  <span>{line.trim().substring(2)}</span>
+                                </div>
+                              );
+                            }
+
+                            if (isHeader) {
+                              return (
+                                <p key={i} className="font-semibold text-slate-900 mt-2 mb-1">
+                                  {line}
+                                </p>
+                              );
+                            }
+
+                            // Standard paragraph with simple bold formatting
+                            return (
+                              <p key={i} className="mb-1">
+                                {line.split(/(\*\*.*?\*\*)/).map((part, j) =>
+                                  part.startsWith('**') && part.endsWith('**') ?
+                                    <strong key={j} className="font-semibold text-slate-900">{part.slice(2, -2)}</strong> :
+                                    part
+                                )}
+                              </p>
+                            );
+                          })
+                          }
+                        </div>
+                      ) : (
+                        // User messages - simple text
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap text-white">
+                          {message.content}
+                        </p>
+                      )}
+
                       {/* Message timestamp - subtle */}
                       <p className={`text-[9px] sm:text-[10px] mt-1 ${message.role === 'user' ? 'text-blue-200' : 'text-gray-400'}`}>
-                        {new Date(message.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </p>
                     </div>
                   </div>
                 ))}
-
-                {/* Sanction Letter Card - Responsive */}
                 {/* PHASE 10: Sanction Letter Card - Professional styling, no emojis */}
                 {showSanctionLetter && loanDetails && (
                   <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-500 rounded-lg p-3 sm:p-4 animate-fadeIn">
@@ -1863,11 +1953,11 @@ export function ChatWidget() {
                       </div>
                     </div>
                     <button
-                      onClick={downloadSanctionLetter}
+                      onClick={() => setShowLetterModal(true)}
                       className="mt-4 w-full bg-green-600 text-white py-2 rounded-lg flex items-center justify-center gap-2 hover:bg-green-700 transition-colors"
                     >
-                      <Download className="w-4 h-4" />
-                      Download Sanction Letter
+                      <Eye className="w-4 h-4" />
+                      View Sanction Letter
                     </button>
                   </div>
                 )}
@@ -1912,9 +2002,9 @@ export function ChatWidget() {
                 {isLoading && (
                   <div className="flex gap-3">
                     <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden bg-white border-2 border-blue-500 shadow-md">
-                      <img 
-                        src={tataLogo} 
-                        alt="Tata Capital" 
+                      <img
+                        src={tataLogo}
+                        alt="Tata Capital"
                         className="w-8 h-8 object-contain animate-pulse"
                         onError={(e) => {
                           e.currentTarget.style.display = 'none';
@@ -1944,11 +2034,11 @@ export function ChatWidget() {
               {sessionClosed && (
                 <div className="mb-3 p-3 bg-gray-100 rounded-lg text-center">
                   <p className="text-sm text-gray-600">
-                    {closureReason === 'LOAN_SANCTIONED' 
+                    {closureReason === 'LOAN_SANCTIONED'
                       ? 'This loan application has been completed. Your sanction letter is ready for download.'
                       : closureReason === 'LOAN_REJECTED'
-                      ? 'This loan application session has ended.'
-                      : 'This session has been closed.'
+                        ? 'This loan application session has ended.'
+                        : 'This session has been closed.'
                     }
                   </p>
                   <button
@@ -1960,9 +2050,9 @@ export function ChatWidget() {
                   </button>
                 </div>
               )}
-              
+
               {/* HARD RESET: Upload button REMOVED - Income from database only */}
-              
+
               <div className="flex gap-2">
                 <input
                   ref={inputRef}
@@ -1978,7 +2068,7 @@ export function ChatWidget() {
                   style={{ fontSize: '16px' }} /* Prevents iOS zoom */
                 />
                 <button
-                  onClick={sendMessage}
+                  onClick={() => sendMessage()}
                   disabled={isLoading || !inputValue.trim() || sessionClosed}
                   className="bg-[#3B82F6] text-white p-2.5 sm:p-3 rounded-xl hover:bg-[#2563EB] transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-w-[44px] min-h-[44px] flex items-center justify-center"
                 >
@@ -1988,6 +2078,15 @@ export function ChatWidget() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Sanction Letter Modal */}
+      {showLetterModal && loanDetails && (
+        <SanctionLetter
+          customerName={customerName || 'Customer'}
+          loanDetails={loanDetails}
+          onClose={() => setShowLetterModal(false)}
+        />
       )}
     </>
   );

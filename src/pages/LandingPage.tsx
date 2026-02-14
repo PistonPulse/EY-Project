@@ -35,10 +35,10 @@ export function LandingPage() {
     openChatWidget(source);
   };
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-white pt-[60px] sm:pt-[73px]">
       <Navbar />
       <AIChatBanner />
-      
+
       {/* PHASE 8: Customer Acquisition Simulation Panel */}
       {/* This simulates how customers arrive via digital marketing channels */}
       <section className="bg-gradient-to-r from-purple-600 to-indigo-600 py-4 px-6">
@@ -86,7 +86,7 @@ export function LandingPage() {
                 Get approved in 5 minutes by our new AI Agent. Zero paperwork, instant disbursal.
               </p>
               <div className="flex flex-col sm:flex-row gap-4 mb-8">
-                <button 
+                <button
                   onClick={() => handleAcquisitionClick('AD')}
                   className="bg-[#3B82F6] text-white px-8 py-4 rounded-lg hover:bg-[#2563EB] transition-colors text-base font-semibold"
                 >
@@ -96,7 +96,7 @@ export function LandingPage() {
                   Calculate EMI
                 </button>
               </div>
-              
+
               {/* Trust Indicators */}
               <div className="flex flex-wrap items-center gap-6 text-base text-gray-600">
                 <div className="flex items-center gap-2">
@@ -113,7 +113,7 @@ export function LandingPage() {
                 </div>
               </div>
             </div>
-            
+
             {/* Right Side - Image */}
             <div className="relative mt-8 md:mt-0">
               <ImageWithFallback
@@ -121,13 +121,13 @@ export function LandingPage() {
                 alt="Happy professional using smartphone"
                 className="w-full h-auto rounded-lg shadow-2xl"
               />
-              
+
               {/* Floating Stats */}
               <div className="absolute -bottom-6 -left-6 bg-white rounded-xl shadow-xl p-4 border border-gray-100">
                 <div className="text-4xl font-bold text-[#004589] mb-1">₹50K+</div>
                 <div className="text-sm text-gray-600">Loans Disbursed</div>
               </div>
-              
+
               <div className="absolute -top-6 -right-6 bg-white rounded-xl shadow-xl p-4 border border-gray-100">
                 <div className="text-4xl font-bold text-green-600 mb-1">4.9★</div>
                 <div className="text-sm text-gray-600">Customer Rating</div>
@@ -144,7 +144,7 @@ export function LandingPage() {
             <h2 className="text-4xl font-bold text-gray-900 mb-4">Why Choose Tata Capital?</h2>
             <p className="text-xl text-gray-600">Fast, transparent, and customer-friendly loan process</p>
           </div>
-          
+
           <div className="grid md:grid-cols-3 gap-8">
             {/* Card 1 */}
             <div className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm hover:shadow-lg transition-shadow">
@@ -183,7 +183,7 @@ export function LandingPage() {
             <h2 className="text-4xl font-bold text-gray-900 mb-4">Our Products</h2>
             <p className="text-xl text-gray-600">Comprehensive financial solutions for all your needs</p>
           </div>
-          
+
           <div className="grid md:grid-cols-3 gap-8">
             {/* Personal Loans */}
             <div className="bg-white p-8 rounded-xl shadow-lg hover:shadow-xl transition-shadow border border-gray-100">
@@ -197,7 +197,7 @@ export function LandingPage() {
                 <li>• Tenure: 12-60 months</li>
                 <li>• Minimal documentation</li>
               </ul>
-              <button 
+              <button
                 onClick={() => openChatWidget()}
                 className="w-full bg-[#004589] text-white py-3 rounded-lg hover:bg-[#003366] transition-colors text-base font-semibold"
               >
@@ -217,7 +217,7 @@ export function LandingPage() {
                 <li>• Tenure: Up to 30 years</li>
                 <li>• Tax benefits available</li>
               </ul>
-              <button 
+              <button
                 onClick={() => openChatWidget()}
                 className="w-full bg-[#004589] text-white py-3 rounded-lg hover:bg-[#003366] transition-colors text-base font-semibold"
               >
@@ -237,7 +237,7 @@ export function LandingPage() {
                 <li>• Flexible repayment</li>
                 <li>• Quick processing</li>
               </ul>
-              <button 
+              <button
                 onClick={() => openChatWidget()}
                 className="w-full bg-[#004589] text-white py-3 rounded-lg hover:bg-[#003366] transition-colors text-base font-semibold"
               >
@@ -255,7 +255,7 @@ export function LandingPage() {
             <h2 className="text-4xl font-bold text-gray-900 mb-4">How It Works</h2>
             <p className="text-xl text-gray-600">Get your loan in 3 simple steps</p>
           </div>
-          
+
           <div className="grid md:grid-cols-3 gap-8">
             <div className="text-center">
               <div className="w-20 h-20 bg-[#3B82F6] text-white rounded-full flex items-center justify-center mx-auto mb-4 text-3xl font-bold">
@@ -264,7 +264,7 @@ export function LandingPage() {
               <h3 className="text-2xl font-semibold mb-3 text-gray-900">Chat with AI</h3>
               <p className="text-base text-gray-600 leading-relaxed">Tell our AI assistant about your loan requirement. Share basic details like name and phone.</p>
             </div>
-            
+
             <div className="text-center">
               <div className="w-20 h-20 bg-[#3B82F6] text-white rounded-full flex items-center justify-center mx-auto mb-4 text-3xl font-bold">
                 2
@@ -272,7 +272,7 @@ export function LandingPage() {
               <h3 className="text-2xl font-semibold mb-3 text-gray-900">Instant Verification</h3>
               <p className="text-base text-gray-600 leading-relaxed">AI verifies your profile, credit score, and eligibility in seconds using secure APIs.</p>
             </div>
-            
+
             <div className="text-center">
               <div className="w-20 h-20 bg-[#3B82F6] text-white rounded-full flex items-center justify-center mx-auto mb-4 text-3xl font-bold">
                 3
@@ -314,7 +314,7 @@ export function LandingPage() {
           <div className="text-center mb-12">
             <h2 className="text-4xl font-bold text-gray-900 mb-4">What Our Customers Say</h2>
           </div>
-          
+
           <div className="grid md:grid-cols-3 gap-8">
             {[
               { name: 'Priya S.', role: 'Software Engineer', text: 'Got my loan approved in 5 minutes! The AI assistant made it so easy.' },
@@ -344,7 +344,7 @@ export function LandingPage() {
           <div className="text-center mb-12">
             <h2 className="text-3xl text-gray-900 mb-4">Why Trust Tata Capital?</h2>
           </div>
-          
+
           <div className="grid md:grid-cols-4 gap-8">
             <div className="text-center">
               <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -383,7 +383,7 @@ export function LandingPage() {
         <div className="max-w-4xl mx-auto text-center text-white">
           <h2 className="text-3xl mb-4">Ready to Get Your Loan?</h2>
           <p className="text-xl mb-8 opacity-90">Chat with our AI assistant now. Takes less than 5 minutes!</p>
-          <button 
+          <button
             onClick={() => handleAcquisitionClick('AD')}
             className="bg-white text-[#004589] px-8 py-4 rounded-lg hover:bg-gray-100 transition-colors font-semibold"
           >

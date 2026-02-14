@@ -308,7 +308,8 @@ STAGE_PROMPTS = {
     Be helpful and clear. Use 1-2 emojis. Keep it concise.""",
     
     "UNDERWRITING": """The customer's application is being processed by our underwriting team.
-    Let them know to hang tight and that it usually takes just a moment.
+    Let them know to hang tight while we verify details (takes about 8-10 seconds).
+    Do NOT ask them to type anything. Just say you are checking.
     Be reassuring. Use 1 emoji. Keep it 2 sentences.""",
     
     "SANCTION": """CONGRATULATIONS! The loan is APPROVED!
