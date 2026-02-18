@@ -1,4 +1,5 @@
-# TataSmartAgent v3.0 - Production Backend Dependencies
+# Agentic Lending Platform — Active Server Dependencies
+# Install with:  pip install -r requirements.txt
 
 # Core Framework
 fastapi==0.115.5
@@ -7,14 +8,11 @@ python-multipart==0.0.12
 pydantic==2.10.3
 pydantic-settings==2.6.1
 
-# LangChain & LangGraph
-langgraph==0.2.55
-langchain==0.3.13
-langchain-core==0.3.28
-langchain-google-genai==2.0.8
-
 # Google Gemini AI
 google-generativeai==0.8.3
+
+# Groq Fallback
+groq>=0.4.0
 
 # WebSocket Support
 websockets==14.1
@@ -23,12 +21,12 @@ websockets==14.1
 aiofiles==24.1.0
 anyio==4.7.0
 
+# PDF Generation
+reportlab>=4.0.0
+
 # Utilities
 python-dotenv==1.0.1
 httpx==0.28.1
 
 # Type Checking & Validation
 typing-extensions==4.12.2
-
-# Optional: For production deployment
-gunicorn==23.0.0

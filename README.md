@@ -1,7 +1,11 @@
 # 🏦 Tata Capital - AI Loan Chatbot
 
 > **AI-Powered Personal Loan Application System with Google Gemini**  
-> Version 3.0 | February 2026
+> Version 4.0 | February 2026
+
+> [!IMPORTANT]
+> **Active Backend Entry Point:** `src/backend/main.py`  
+> Do **not** use `backend/main.py` — that module contains the production-architecture scaffolding (agents, orchestration) and is not yet wired to serve traffic.
 
 ---
 
@@ -55,12 +59,13 @@ npm run dev
 
 | Feature | Description |
 |---------|-------------|
-| 🤖 **Gemini AI** | Dynamic, natural responses using Google Gemini 2.0 Flash |
-| 📊 **13-Stage Flow** | Deterministic loan application journey |
+| 🤖 **Gemini AI + Groq Fallback** | Dynamic responses via Gemini 2.0 Flash → Groq LLaMA 3.1 → Static |
+| 📊 **16-Stage Flow** | Deterministic loan application journey |
 | 👨‍💼 **Admin Dashboard** | Real-time monitoring via WebSocket |
 | 📄 **PDF Generation** | Professional Tata Capital sanction letters |
 | 🔒 **Secure Validation** | PAN, mobile, OTP verification |
 | 💰 **EMI Calculator** | Dynamic tenure-based calculations |
+| 🛡️ **AI Guardrails** | Financial data never sent to LLM; sanitizer strips leaked numbers |
 
 ---
 
@@ -86,11 +91,20 @@ For complete system documentation, see:
 ## 🏗️ Architecture
 
 ```
-Frontend (React + Vite)  →  Backend (FastAPI + Python)
-        ↓                           ↓
-    Chat Widget              Gemini AI + Deterministic Flow
-        ↓                           ↓
-  Admin Dashboard            PDF Generator + Mock Data
+Frontend (React + Vite)       →     Backend (FastAPI + Python)
+        ↓                                     ↓
+    Chat Widget                    Deterministic 16-Stage Flow
+        ↓                                     ↓
+  Admin Dashboard              Gemini → Groq → Static Fallback
+  (WebSocket live)                        ↓
+                                PDF Generator + Mock Services
+```
+
+### AI Fallback Chain
+```
+Gemini API ──fail──→ Groq API ──fail──→ Static Response
+     ↓                    ↓                     ↓
+  sanitize()          sanitize()         FALLBACK_RESPONSES
 ```
 
 ---
@@ -119,9 +133,13 @@ EY-Tata-Chatbot/
 ## 🔐 Environment Variables
 
 ```bash
-# src/backend/.env
+# src/backend/.env (or project-root .env)
 GEMINI_API_KEY=your_api_key_here
-USE_GEMINI=true  # Set to "false" for hardcoded-only mode
+USE_GEMINI=true            # Set to "false" for hardcoded-only mode
+GROQ_API_KEY=your_groq_key # Fallback LLM (optional)
+GROQ_MODEL_NAME=llama-3.1-8b-instant
 ```
+
+> ⚠️ **Never commit `.env` to version control.** It is already in `.gitignore`.
 
 ---

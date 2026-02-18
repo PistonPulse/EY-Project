@@ -1,4 +1,4 @@
-import { MessageCircle, X, Send, Upload, Download, CheckCircle, RotateCcw, Clock, Eye } from 'lucide-react';
+import { MessageCircle, X, Send, Upload, Download, CheckCircle, RotateCcw, Clock, Eye, FileText } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import tataLogo from "../assets/Tata_Capital_Logo-01.jpg";
 import jsPDF from 'jspdf';
@@ -346,6 +346,30 @@ const FORMAL_STAGES = [
   'REJECTION'
 ];
 
+// ================================================================================
+// STEP PROGRESS INDICATOR — Stage labels and ordering
+// ================================================================================
+const STAGE_LABELS: Record<string, { label: string; step: number; total: number; icon: string }> = {
+  GREETING: { label: 'Welcome', step: 1, total: 16, icon: '👋' },
+  PURPOSE: { label: 'Loan Type', step: 2, total: 16, icon: '🎯' },
+  AMOUNT: { label: 'Loan Amount', step: 3, total: 16, icon: '💰' },
+  CITY: { label: 'Location', step: 4, total: 16, icon: '📍' },
+  EMPLOYMENT_TYPE: { label: 'Employment', step: 5, total: 16, icon: '💼' },
+  NAME: { label: 'Your Name', step: 6, total: 16, icon: '👤' },
+  MOBILE: { label: 'Mobile', step: 7, total: 16, icon: '📱' },
+  OTP: { label: 'Verification', step: 8, total: 16, icon: '🔐' },
+  INCOME: { label: 'Income', step: 9, total: 16, icon: '📊' },
+  EXISTING_EMI: { label: 'Existing Loans', step: 10, total: 16, icon: '📋' },
+  DOB: { label: 'Date of Birth', step: 11, total: 16, icon: '🎂' },
+  KYC: { label: 'KYC / PAN', step: 12, total: 16, icon: '🛡️' },
+  OFFER_DISCUSSION: { label: 'Offer', step: 13, total: 16, icon: '🎁' },
+  TENURE_SELECTION: { label: 'Tenure', step: 14, total: 16, icon: '📅' },
+  UNDERWRITING: { label: 'Underwriting', step: 15, total: 16, icon: '⚖️' },
+  SANCTION: { label: 'Sanctioned', step: 16, total: 16, icon: '✅' },
+  INCOME_DOC_UPLOAD: { label: 'Documents', step: 14, total: 16, icon: '📄' },
+  REJECTION: { label: 'Decision', step: 16, total: 16, icon: '📝' },
+};
+
 // Remove emojis from text for formal stages
 const sanitizeForFormalTone = (text: string, stage: string): string => {
   if (!FORMAL_STAGES.includes(stage)) {
@@ -505,13 +529,15 @@ export function ChatWidget() {
   // ================================================================
   const [currentStage, setCurrentStage] = useState<string>('GREETING');
 
-  // DERIVED: showUpload is now computed from currentStage, not independently set
-  // This prevents the upload button from reappearing after stage advances
-  const showUpload = currentStage === 'INCOME_DOC_UPLOAD';
+  // DERIVED: showUpload is driven by the backend's show_upload response flag
+  // (Previously checked legacy 'INCOME_DOC_UPLOAD' stage which no longer exists)
+  const [showUploadFlag, setShowUploadFlag] = useState(false);
+  const showUpload = showUploadFlag;
 
 
   const [showLetterModal, setShowLetterModal] = useState(false);
   const [showSanctionLetter, setShowSanctionLetter] = useState(false);
+  const [showConfetti, setShowConfetti] = useState(false);
   const [loanDetails, setLoanDetails] = useState<LoanDetails | null>(null);
   const [customerName, setCustomerName] = useState<string | null>(null);
   const [uploadedDocs, setUploadedDocs] = useState<string[]>([]);
@@ -529,6 +555,114 @@ export function ChatWidget() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const confettiCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // ================================================================
+  // CONFETTI ANIMATION — triggered on sanction approval
+  // Pure canvas particle system, no external deps
+  // ================================================================
+  useEffect(() => {
+    if (!showSanctionLetter || !showConfetti) return;
+    const canvas = confettiCanvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = canvas.parentElement?.clientWidth || 400;
+    canvas.height = canvas.parentElement?.clientHeight || 600;
+
+    const colors = ['#22c55e', '#16a34a', '#fbbf24', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444'];
+    const particles: Array<{
+      x: number; y: number; vx: number; vy: number;
+      size: number; color: string; rotation: number; rotationSpeed: number;
+      opacity: number; shape: 'rect' | 'circle';
+    }> = [];
+
+    for (let i = 0; i < 80; i++) {
+      particles.push({
+        x: Math.random() * canvas.width,
+        y: -10 - Math.random() * 100,
+        vx: (Math.random() - 0.5) * 4,
+        vy: Math.random() * 3 + 2,
+        size: Math.random() * 6 + 3,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        rotation: Math.random() * Math.PI * 2,
+        rotationSpeed: (Math.random() - 0.5) * 0.2,
+        opacity: 1,
+        shape: Math.random() > 0.5 ? 'rect' : 'circle',
+      });
+    }
+
+    let frame = 0;
+    const maxFrames = 180; // ~3 seconds at 60fps
+
+    const animate = () => {
+      if (frame >= maxFrames) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        setShowConfetti(false);
+        return;
+      }
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      particles.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.05; // gravity
+        p.vx *= 0.99; // air resistance
+        p.rotation += p.rotationSpeed;
+        p.opacity = Math.max(0, 1 - frame / maxFrames);
+
+        ctx.save();
+        ctx.globalAlpha = p.opacity;
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rotation);
+        ctx.fillStyle = p.color;
+
+        if (p.shape === 'rect') {
+          ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+        } else {
+          ctx.beginPath();
+          ctx.arc(0, 0, p.size / 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      });
+
+      frame++;
+      requestAnimationFrame(animate);
+    };
+
+    animate();
+  }, [showConfetti, showSanctionLetter]);
+
+  // ================================================================
+  // UPLOAD SUCCESS SOUND — subtle ding using Web Audio API
+  // ================================================================
+  const playUploadSound = useCallback(() => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+      oscillator.frequency.setValueAtTime(1109, audioCtx.currentTime + 0.08); // C#6
+      oscillator.frequency.setValueAtTime(1318, audioCtx.currentTime + 0.16); // E6
+
+      gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
+
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.35);
+    } catch (e) {
+      // Silently fail — sound is optional UX
+    }
+  }, []);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // ================================================================
@@ -970,17 +1104,17 @@ export function ChatWidget() {
 
       // ================================================================
       // CRITICAL FIX: Update currentStage from backend response
-      // showUpload is DERIVED from currentStage, not set directly
-      // Backend sends "conversation_stage", we store it as currentStage
+      // showUpload is driven by the backend's show_upload flag
       // ================================================================
       if (newStage) {
         setCurrentStage(newStage);
       }
-      // Note: showUpload is now derived: showUpload = (currentStage === 'INCOME_DOC_UPLOAD')
-      // No more setShowUpload(true/false) - it's automatic!
+      // Sync showUpload from backend response
+      setShowUploadFlag(data.show_upload === true);
 
       if (data.show_sanction_letter) {
         setShowSanctionLetter(true);
+        setShowConfetti(true); // 🎉 Trigger confetti animation
         setLoanDetails(data.loan_details);
       }
 
@@ -1350,6 +1484,9 @@ export function ChatWidget() {
         setMessages(prev => [...prev, botMessage]);
       }
 
+      // Play upload success sound
+      playUploadSound();
+
       // ================================================================
       // CRITICAL FIX: Update stage from upload response
       // showUpload is DERIVED from currentStage, not manually toggled
@@ -1371,6 +1508,7 @@ export function ChatWidget() {
       // Handle sanction letter display
       if (data.show_sanction_letter) {
         setShowSanctionLetter(true);
+        setShowConfetti(true); // 🎉 Trigger confetti animation
         setLoanDetails(data.loan_details);
       }
 
@@ -1830,6 +1968,39 @@ export function ChatWidget() {
               </div>
             </div>
 
+            {/* ═══ STEP PROGRESS INDICATOR ═══ */}
+            {(() => {
+              const stageInfo = STAGE_LABELS[currentStage];
+              if (!stageInfo) return null;
+              const pct = Math.round((stageInfo.step / stageInfo.total) * 100);
+              return (
+                <div className="px-3 sm:px-4 py-2 bg-white border-b border-gray-100 flex-shrink-0"
+                  style={{ animation: 'fadeIn 0.3s ease-out' }}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs">{stageInfo.icon}</span>
+                      <span className="text-xs font-medium text-gray-700">Step {stageInfo.step}/{stageInfo.total}</span>
+                      <span className="text-xs text-gray-400">·</span>
+                      <span className="text-xs text-gray-500">{stageInfo.label}</span>
+                    </div>
+                    <span className="text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full">
+                      {pct}%
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${pct}%`,
+                        background: 'linear-gradient(90deg, #3B82F6, #2563EB)',
+                        transition: 'width 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Chat Content - Responsive padding */}
             <div className="flex-1 p-3 sm:p-4 overflow-y-auto bg-gradient-to-b from-gray-50 to-gray-100 scroll-smooth" style={{ scrollBehavior: 'smooth' }}>
               <div className="space-y-4 sm:space-y-5">
@@ -1927,38 +2098,80 @@ export function ChatWidget() {
                     </div>
                   </div>
                 ))}
-                {/* PHASE 10: Sanction Letter Card - Professional styling, no emojis */}
+                {/* ═══ SANCTION LETTER CARD — with View + Download ═══ */}
                 {showSanctionLetter && loanDetails && (
-                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-500 rounded-lg p-3 sm:p-4 animate-fadeIn">
-                    <div className="flex items-center gap-2 mb-2 sm:mb-3">
-                      <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-green-600" />
-                      <h4 className="text-green-900 font-semibold text-sm sm:text-base">Loan Approved</h4>
+                  <div
+                    className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-500 rounded-xl p-3 sm:p-4 relative overflow-hidden"
+                    style={{
+                      animation: 'scaleIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards, sanctionGlow 2s ease-in-out 0.5s 3'
+                    }}
+                  >
+                    {/* Confetti Canvas Overlay */}
+                    {showConfetti && (
+                      <canvas
+                        ref={confettiCanvasRef}
+                        className="absolute inset-0 w-full h-full pointer-events-none z-10"
+                      />
+                    )}
+                    {/* Success badge */}
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-8 h-8 rounded-full bg-green-500 flex items-center justify-center">
+                        <CheckCircle className="w-5 h-5 text-white" />
+                      </div>
+                      <div>
+                        <h4 className="text-green-900 font-bold text-sm sm:text-base leading-tight">Loan Sanctioned</h4>
+                        <p className="text-green-700 text-[10px] sm:text-xs">Valid for 30 days</p>
+                      </div>
                     </div>
-                    <div className="space-y-1.5 sm:space-y-2 text-xs sm:text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-gray-700">Sanctioned Amount:</span>
-                        <span className="text-gray-900">₹{(loanDetails.amount || 0).toLocaleString('en-IN')}</span>
+
+                    {/* Loan summary grid */}
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <div className="bg-white/70 rounded-lg px-2.5 py-2">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider">Amount</p>
+                        <p className="text-sm font-bold text-gray-900">₹{(loanDetails.amount || 0).toLocaleString('en-IN')}</p>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-700">Interest Rate:</span>
-                        <span className="text-gray-900">{loanDetails.interest_rate || 0}% p.a.</span>
+                      <div className="bg-white/70 rounded-lg px-2.5 py-2">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider">Rate</p>
+                        <p className="text-sm font-bold text-gray-900">{loanDetails.interest_rate || 0}% p.a.</p>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-700">Tenure:</span>
-                        <span className="text-gray-900">{loanDetails.tenure_months || 0} months</span>
+                      <div className="bg-white/70 rounded-lg px-2.5 py-2 relative"
+                        style={
+                          (loanDetails.tenure_months === 24 || loanDetails.tenure_months === 36)
+                            ? { animation: 'recommendedPulse 2s ease-in-out infinite', border: '1.5px solid #3b82f6' }
+                            : {}
+                        }
+                      >
+                        {(loanDetails.tenure_months === 24 || loanDetails.tenure_months === 36) && (
+                          <span className="absolute -top-2 -right-1 text-[8px] bg-blue-500 text-white px-1.5 py-0 rounded-full font-semibold tracking-wide uppercase">
+                            Recommended
+                          </span>
+                        )}
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider">Tenure</p>
+                        <p className="text-sm font-bold text-gray-900">{loanDetails.tenure_months || 0} months</p>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-700">Monthly EMI:</span>
-                        <span className="text-gray-900">₹{(loanDetails.monthly_emi || 0).toLocaleString('en-IN')}</span>
+                      <div className="bg-white/70 rounded-lg px-2.5 py-2">
+                        <p className="text-[10px] text-gray-500 uppercase tracking-wider">EMI</p>
+                        <p className="text-sm font-bold text-gray-900">₹{(loanDetails.monthly_emi || 0).toLocaleString('en-IN')}</p>
                       </div>
                     </div>
-                    <button
-                      onClick={() => setShowLetterModal(true)}
-                      className="mt-4 w-full bg-green-600 text-white py-2 rounded-lg flex items-center justify-center gap-2 hover:bg-green-700 transition-colors"
-                    >
-                      <Eye className="w-4 h-4" />
-                      View Sanction Letter
-                    </button>
+
+                    {/* Action buttons */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setShowLetterModal(true)}
+                        className="flex-1 bg-white text-green-700 border-2 border-green-500 py-2 rounded-lg flex items-center justify-center gap-1.5 hover:bg-green-50 transition-all text-sm font-medium"
+                      >
+                        <Eye className="w-4 h-4" />
+                        View
+                      </button>
+                      <button
+                        onClick={downloadSanctionLetter}
+                        className="flex-1 bg-green-600 text-white py-2 rounded-lg flex items-center justify-center gap-1.5 hover:bg-green-700 transition-all text-sm font-medium shadow-md hover:shadow-lg"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download PDF
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -1998,28 +2211,31 @@ export function ChatWidget() {
                   </div>
                 )}
 
-                {/* PHASE 10: Loading Indicator - Professional, smooth animation with contextual message */}
+                {/* ═══ ENHANCED TYPING INDICATOR ═══ */}
                 {isLoading && (
-                  <div className="flex gap-3">
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden bg-white border-2 border-blue-500 shadow-md">
+                  <div className="flex gap-2 sm:gap-3" style={{ animation: 'fadeSlideIn 0.3s ease-out forwards' }}>
+                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden bg-white border-2 border-blue-500 shadow-md">
                       <img
                         src={tataLogo}
                         alt="Tata Capital"
-                        className="w-8 h-8 object-contain animate-pulse"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                        }}
+                        className="w-6 h-6 sm:w-8 sm:h-8 object-contain"
+                        style={{ animation: 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite' }}
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
                       />
                     </div>
-                    <div className="bg-white p-3 rounded-xl shadow-md border border-gray-100">
-                      <div className="flex items-center gap-2">
-                        <div className="flex gap-1">
-                          <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce"></div>
-                          <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                          <div className="w-2 h-2 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    <div className="bg-white p-3 rounded-2xl rounded-tl-sm shadow-md border border-gray-100 max-w-[80%]">
+                      {/* Typing dots */}
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <div className="flex gap-[3px]">
+                          <span className="w-[6px] h-[6px] bg-blue-500 rounded-full" style={{ animation: 'typingDot 1.4s infinite', animationDelay: '0s' }} />
+                          <span className="w-[6px] h-[6px] bg-blue-400 rounded-full" style={{ animation: 'typingDot 1.4s infinite', animationDelay: '0.2s' }} />
+                          <span className="w-[6px] h-[6px] bg-blue-300 rounded-full" style={{ animation: 'typingDot 1.4s infinite', animationDelay: '0.4s' }} />
                         </div>
-                        <span className="text-sm text-slate-600 ml-2">{loadingMessage}</span>
                       </div>
+                      {/* Contextual message */}
+                      <p className="text-xs text-slate-500 leading-snug" style={{ animation: 'fadeIn 0.5s ease-out' }}>
+                        {loadingMessage}
+                      </p>
                     </div>
                   </div>
                 )}
@@ -2051,7 +2267,44 @@ export function ChatWidget() {
                 </div>
               )}
 
-              {/* HARD RESET: Upload button REMOVED - Income from database only */}
+              {/* ═══ DOCUMENT UPLOAD UI ═══ */}
+              {showUpload && !sessionClosed && (
+                <div
+                  className="mb-3 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-dashed border-blue-300 rounded-xl"
+                  style={{ animation: 'scaleIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards' }}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <FileText className="w-4 h-4 text-blue-600" />
+                    <span className="text-xs font-semibold text-blue-800">Upload Documents</span>
+                  </div>
+                  {uploadedDocs.length > 0 && (
+                    <div className="mb-2 space-y-1">
+                      {uploadedDocs.map((doc, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5 text-[11px] text-green-700 bg-green-50 rounded-md px-2 py-1">
+                          <CheckCircle className="w-3 h-3" />
+                          <span className="truncate">{doc}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                    accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isLoading}
+                    className="w-full bg-white text-blue-700 border border-blue-300 py-2 rounded-lg flex items-center justify-center gap-2 hover:bg-blue-50 transition-all text-xs font-medium disabled:opacity-50"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    Choose File
+                  </button>
+                  <p className="text-[10px] text-gray-400 text-center mt-1.5">PDF, JPG, PNG, DOC up to 5 MB</p>
+                </div>
+              )}
 
               <div className="flex gap-2">
                 <input

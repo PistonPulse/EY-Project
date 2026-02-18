@@ -15,6 +15,7 @@ node_modules/
 dist/
 .env
 .env.local
+.env.example
 
 # IDE
 .vscode/
@@ -29,3 +30,11 @@ Thumbs.db
 # Logs
 *.log
 backend.log
+
+# Generated files
+src/backend/sanction_letters/*.pdf
+src/backend/stage_states/
+*.pdf
+
+# Cache
+.cache/

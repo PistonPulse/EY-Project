@@ -202,6 +202,7 @@ class ChatResponse(BaseModel):
     admin_data: Optional[Dict[str, Any]] = None
     session_closed: bool = False
     closure_reason: Optional[str] = None
+    ai_enhanced: bool = False  # True when Gemini/Groq generated the response
 
 
 # ==================== HELPERS ====================
@@ -572,7 +573,7 @@ Your official sanction letter is ready for download below! 👇
 Welcome to the Tata Capital family - we're honored to be part of your journey! 🙏"""
 
 
-async def generate_deterministic_response(stage: str, session_data: dict) -> str:
+async def generate_deterministic_response(stage: str, session_data: dict) -> tuple:
     """
     MAIN RESPONSE GENERATOR - Tries Gemini first, falls back to hardcoded.
     
@@ -580,22 +581,20 @@ async def generate_deterministic_response(stage: str, session_data: dict) -> str
     1. If Gemini is available and enabled → Generate dynamic AI response
     2. If Gemini fails or is disabled → Use hardcoded response (backup)
     
-    This ensures:
-    - Natural, varied responses when AI is available
-    - Reliable fallback when AI is unavailable
-    - No service interruption regardless of AI status
+    Returns:
+        tuple: (response_text: str, ai_enhanced: bool)
     """
     # Try Gemini first if available
     if gemini_model and USE_GEMINI:
         try:
             gemini_response = await generate_gemini_response(stage, session_data)
             if gemini_response:
-                return gemini_response
+                return gemini_response, True
         except Exception as e:
             print(f"⚠️ Gemini fallback triggered: {e}")
     
     # Fallback to hardcoded response
-    return generate_deterministic_response_hardcoded(stage, session_data)
+    return generate_deterministic_response_hardcoded(stage, session_data), False
 
 
 # ==================== MAIN ENDPOINTS ====================
@@ -657,10 +656,29 @@ async def deterministic_chat_endpoint(request: ChatRequest):
         # Generate bot response (async - uses Gemini with hardcoded fallback)
         current_stage = result.get("current_stage", "GREETING")
         session_data = result.get("session", {})
-        bot_response = await generate_deterministic_response(current_stage, session_data)
+        bot_response, ai_enhanced = await generate_deterministic_response(current_stage, session_data)
+        
+        # Store chat messages in session for admin live view
+        timestamp = datetime.now().isoformat()
+        controller = get_flow_controller()
+        session_obj = controller.get_session(request.session_id)
+        if session_obj:
+            session_obj.chat_history.append({
+                "role": "user",
+                "text": request.message,
+                "time": timestamp,
+                "stage": current_stage
+            })
+            session_obj.chat_history.append({
+                "role": "bot",
+                "text": bot_response,
+                "time": timestamp,
+                "stage": current_stage
+            })
+            # Refresh admin state after storing chat
+            admin_state = get_admin_state(request.session_id)
         
         # Broadcast to admin dashboard
-        timestamp = datetime.now().isoformat()
         
         await broadcast_to_admin({
             "type": "user_message",
@@ -720,7 +738,8 @@ async def deterministic_chat_endpoint(request: ChatRequest):
             customer_name=session_data.get("user_name"),
             session_closed=is_terminal,
             closure_reason=session_data.get("underwriting_result") if is_terminal else None,
-            admin_data=admin_state
+            admin_data=admin_state,
+            ai_enhanced=ai_enhanced
         )
         
     except Exception as e:

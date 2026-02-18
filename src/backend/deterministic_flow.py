@@ -664,6 +664,9 @@ class SessionState:
     # Sanction Letter
     sanction_letter_generated: bool = False
     
+    # Chat History (for admin live view)
+    chat_history: List[Dict[str, Any]] = field(default_factory=list)
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses (user-facing)."""
         return {
@@ -832,6 +835,19 @@ class SessionState:
             
             # Income source (always database)
             "income_source": self.income_source,
+            
+            # Risk Assessment (admin-only, never shown to customer)
+            "risk_assessment": {
+                "credit_score": self.credit_score,
+                "debt_to_income_ratio": self.debt_to_income_ratio,
+                "monthly_income": self.monthly_income,
+                "existing_monthly_emi": self.existing_monthly_emi,
+                "user_age": self.user_age,
+                "score_breakdown": self.credit_score_breakdown,
+            },
+            
+            # Chat history for live conversation view
+            "chat_history": self.chat_history[-50:],  # Last 50 messages
         }
 
 
@@ -964,6 +980,21 @@ class DeterministicFlowController:
         session = self.get_or_create_session(session_id)
         
         # ========================================================================
+        # SESSION INACTIVITY TIMEOUT (15 MINUTES)
+        # ========================================================================
+        now = datetime.now()
+        idle_minutes = (now - session.last_updated).total_seconds() / 60
+        if idle_minutes > 15 and session.current_stage != FlowStage.GREETING:
+            session.is_frozen = True
+            session.freeze_reason = "SESSION_TIMEOUT"
+            logger.warning(f"[{session.session_id}] Session expired after {idle_minutes:.0f} minutes of inactivity")
+            return session, (
+                "Your session has expired due to inactivity. "
+                "For your security, please start a new application."
+            ), False
+        session.last_updated = now
+        
+        # ========================================================================
         # DATA INTEGRITY CHECK - IDENTITY MISMATCH HALTS EVERYTHING
         # ========================================================================
         if session.identity_mismatch:
@@ -972,6 +1003,11 @@ class DeterministicFlowController:
         
         # Check frozen
         if self.is_frozen(session_id):
+            if getattr(session, 'freeze_reason', '') == 'OTP_ATTEMPTS_EXCEEDED':
+                return session, (
+                    "Verification attempts exceeded. For your security, this session "
+                    "has been locked. Please restart the application to try again."
+                ), False
             return session, "Journey is complete. No further input accepted.", False
         
         # Extract relevant data based on current stage
@@ -988,7 +1024,16 @@ class DeterministicFlowController:
             if success:
                 return session, self.get_current_question(session), True
         
-        # Didn't advance - re-ask current question
+        # Didn't advance — provide stage-specific error feedback
+        if session.current_stage == FlowStage.OTP and session.otp_attempts > 0 and not session.otp_verified:
+            remaining = 3 - session.otp_attempts
+            if remaining > 0:
+                return session, (
+                    f"❌ Incorrect OTP. You have {remaining} attempt{'s' if remaining > 1 else ''} remaining.\n\n"
+                    "Please re-enter the 6-digit code sent to your mobile."
+                ), False
+        
+        # Default: re-ask current question
         return session, self.get_current_question(session), False
     
     def _extract_stage_data(self, session: SessionState, message: str) -> bool:
@@ -1335,11 +1380,16 @@ class DeterministicFlowController:
         """
         message_clean = message.lower().replace(',', '').replace(' ', '')
         
-        # Check for annual income (lakhs) - divide by 12
-        lakh_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:lakh|lac|l)\s*(?:per\s*annum|pa|annual|yearly)?', message_clean)
-        if lakh_match:
-            annual = float(lakh_match.group(1)) * 100000
+        # Check for annual income (lakhs with explicit annual marker) - divide by 12
+        annual_lakh_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:lakh|lac|l)\s*(?:per\s*annum|pa|annual|yearly)', message_clean)
+        if annual_lakh_match:
+            annual = float(annual_lakh_match.group(1)) * 100000
             return annual / 12
+        
+        # Check for monthly income in lakhs (default: lakhs = monthly)
+        lakh_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:lakh|lac|l)', message_clean)
+        if lakh_match:
+            return float(lakh_match.group(1)) * 100000  # Treat as monthly
         
         # Check for "X per month" or "X monthly"
         monthly_match = re.search(r'(\d+(?:\.\d+)?)\s*(?:k|thousand)?\s*(?:per\s*month|pm|monthly|month)', message_clean)

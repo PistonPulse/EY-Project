@@ -34,12 +34,16 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import tataLogo from '../assets/Tata_Capital_Logo-01.jpg';
 import { useNavigate } from 'react-router-dom';
 import {
   LogOut, RefreshCw, Users, Activity, Brain, Shield,
   CheckCircle, Clock, FileText, AlertTriangle, XCircle,
-  TrendingUp, Phone, User, Zap, Database, Download, Eye
+  TrendingUp, Phone, User, Zap, Database, Download,
+  MessageSquare, Target, ArrowUpRight, ArrowDownRight,
+  ShieldAlert
 } from 'lucide-react';
+
 
 // ================================================================================
 // TYPE DEFINITIONS - V3 DETERMINISTIC FLOW STRUCTURE
@@ -132,6 +136,29 @@ interface V3AdminState {
 
   income_source: string | null;
   acquisition_source?: string;
+
+  risk_assessment?: {
+    credit_score: number | null;
+    debt_to_income_ratio: number | null;
+    monthly_income: number | null;
+    existing_monthly_emi: number | null;
+    user_age: number | null;
+    score_breakdown: {
+      dti?: { ratio: number; score: number; max: number };
+      income?: { monthly: number; score: number; max: number };
+      employment?: { type: string; score: number; max: number };
+      age?: { years: number; score: number; max: number };
+      loan_ratio?: { ratio: number; score: number; max: number };
+      total?: { score: number; max: number };
+    } | null;
+  };
+
+  chat_history?: Array<{
+    role: 'user' | 'bot';
+    text: string;
+    time: string;
+    stage: string;
+  }>;
 }
 
 // Session summary returned by /admin/sessions
@@ -366,12 +393,10 @@ export function AdminDashboard() {
         <div className="px-4 md:px-6 py-3 md:py-4">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3 md:gap-4">
-              <div className="bg-gradient-to-br from-purple-600 to-indigo-600 p-2 rounded-lg">
-                <Eye className="w-5 h-5 md:w-6 md:h-6 text-white" />
-              </div>
+              <img src={tataLogo} alt="Tata Capital" className="h-10 md:h-12 object-contain" />
               <div>
                 <h1 className="text-lg md:text-xl font-bold text-gray-900">Loan Operations Dashboard</h1>
-                <p className="text-xs md:text-sm text-gray-500 hidden sm:block">Internal Monitoring Console • Aurora Finance NBFC</p>
+                <p className="text-xs md:text-sm text-gray-500 hidden sm:block">Internal Monitoring Console • Tata Capital</p>
               </div>
             </div>
 
@@ -496,8 +521,11 @@ export function AdminDashboard() {
             </div>
           </div>
 
-          {/* ============ CENTER: MAIN PANELS ============ */}
-          <div className="lg:col-span-6 col-span-1 space-y-4 md:space-y-6">
+          {/* ============ CENTER: LIVE CHAT + STAGE ============ */}
+          <div className="lg:col-span-5 col-span-1 space-y-4 md:space-y-6">
+
+            {/* Live Conversation Panel */}
+            <LiveConversationPanel state={selectedSession?.state || null} />
 
             {/* Stage Progression Tracker */}
             <StageProgressionPanel state={selectedSession?.state || null} />
@@ -507,8 +535,10 @@ export function AdminDashboard() {
 
           </div>
 
-          {/* ============ RIGHT: DATA PANELS ============ */}
-          <div className="lg:col-span-3 col-span-1 space-y-4 md:space-y-6">
+          {/* ============ RIGHT: RISK + UNDERWRITING + DATA ============ */}
+          <div className="lg:col-span-4 col-span-1 space-y-4 md:space-y-6">
+
+
 
             {/* Verification & Data Panel */}
             <VerificationDataPanel state={selectedSession?.state || null} />
@@ -524,6 +554,107 @@ export function AdminDashboard() {
       </div>
     </div>
   );
+}
+
+
+// ================================================================================
+// LIVE CONVERSATION PANEL
+// ================================================================================
+
+function LiveConversationPanel({ state }: { state: V3AdminState | null }) {
+  const chatEndRef = React.useRef<HTMLDivElement>(null);
+  const chatMessages = state?.chat_history || [];
+
+  React.useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages.length]);
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+      <div className="p-4 border-b border-gray-200 flex items-center gap-2">
+        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+        <MessageSquare className="w-5 h-5 text-blue-600" />
+        <h2 className="font-semibold text-gray-900">Live Conversation</h2>
+        <span className="ml-auto text-xs text-gray-500">{chatMessages.length} messages</span>
+      </div>
+
+      <div className="h-[300px] overflow-y-auto p-4 space-y-3 bg-gray-50">
+        {chatMessages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-gray-400">
+            <MessageSquare className="w-10 h-10 mb-2 opacity-30" />
+            <p className="text-sm">Waiting for customer interaction...</p>
+            <p className="text-xs mt-1">Messages will appear here in real-time</p>
+          </div>
+        ) : (
+          chatMessages.map((msg, index) => (
+            <div
+              key={index}
+              className={`flex gap-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              {msg.role === 'bot' && (
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 mt-1">
+                  <Brain className="w-3.5 h-3.5 text-white" />
+                </div>
+              )}
+              <div
+                className={`max-w-[75%] p-2.5 rounded-xl text-sm ${msg.role === 'user'
+                  ? 'bg-blue-600 text-white rounded-br-md'
+                  : 'bg-white border border-gray-200 text-gray-800 rounded-bl-md shadow-sm'
+                  }`}
+              >
+                <p className="break-words leading-relaxed whitespace-pre-line">{msg.text}</p>
+                <div className={`flex items-center gap-1 mt-1 text-[10px] ${msg.role === 'user' ? 'text-blue-200 justify-end' : 'text-gray-400'
+                  }`}>
+                  <Clock className="w-2.5 h-2.5" />
+                  {new Date(msg.time).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  <span className="ml-1 px-1 py-0 rounded bg-black/10 text-[9px]">{msg.stage}</span>
+                </div>
+              </div>
+              {msg.role === 'user' && (
+                <div className="w-7 h-7 rounded-full bg-gray-300 flex items-center justify-center flex-shrink-0 mt-1">
+                  <User className="w-3.5 h-3.5 text-gray-600" />
+                </div>
+              )}
+            </div>
+          ))
+        )}
+        <div ref={chatEndRef} />
+      </div>
+    </div>
+  );
+}
+
+
+// ================================================================================
+
+
+// ================================================================================
+// STAGE CONTEXT HELPERS
+// ================================================================================
+
+const STAGE_CONTEXT_LABELS: Record<ConversationStage, string> = {
+  GREETING: 'Awaiting customer greeting',
+  PURPOSE: 'Collecting loan purpose',
+  AMOUNT: 'Awaiting loan amount input',
+  CITY: 'Collecting city of residence',
+  EMPLOYMENT_TYPE: 'Awaiting employment type',
+  NAME: 'Collecting customer name',
+  MOBILE: 'Awaiting mobile number',
+  OTP: 'Waiting for OTP verification',
+  INCOME: 'Collecting monthly income',
+  EXISTING_EMI: 'Collecting existing EMI obligations',
+  DOB: 'Awaiting date of birth / age',
+  KYC: 'Awaiting PAN for identity verification',
+  OFFER_DISCUSSION: 'Presenting pre-approved offer',
+  TENURE_SELECTION: 'Awaiting tenure selection',
+  UNDERWRITING: 'Running underwriting rules engine',
+  SANCTION: 'Loan approved — sanction letter generated',
+  REJECTION: 'Application declined',
+};
+
+function getStageContextLabel(stage?: ConversationStage): string {
+  if (!stage) return 'No active stage';
+  return STAGE_CONTEXT_LABELS[stage] || stage;
 }
 
 
@@ -621,7 +752,7 @@ function StageProgressionPanel({ state }: { state: V3AdminState | null }) {
         </div>
       </div>
 
-      {/* Current Stage Info */}
+      {/* Current Stage Info with Context Badge */}
       <div className="bg-gray-50 rounded-lg p-3 text-sm">
         <div className="flex items-center justify-between">
           <span className="text-gray-600">Current Stage:</span>
@@ -630,12 +761,21 @@ function StageProgressionPanel({ state }: { state: V3AdminState | null }) {
           </span>
         </div>
         {state && (
-          <div className="flex items-center justify-between mt-1">
-            <span className="text-gray-600">Current Handler:</span>
-            <span className="font-medium text-blue-600">
-              {STAGE_TO_AGENT[state.stage?.current_stage as ConversationStage] || 'System'}
-            </span>
-          </div>
+          <>
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-gray-600">Current Handler:</span>
+              <span className="font-medium text-blue-600">
+                {STAGE_TO_AGENT[state.stage?.current_stage as ConversationStage] || 'System'}
+              </span>
+            </div>
+            {/* Stage Context Badge */}
+            <div className="mt-2 flex items-center gap-2">
+              <Target className="w-3.5 h-3.5 text-amber-600" />
+              <span className="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                {getStageContextLabel(state.stage?.current_stage as ConversationStage)}
+              </span>
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -879,11 +1019,14 @@ function VerificationDataPanel({ state }: { state: V3AdminState | null }) {
  */
 
 function UnderwritingDecisionPanel({ state }: { state: V3AdminState | null }) {
+  const risk = state?.risk_assessment;
+  const breakdown = risk?.score_breakdown;
+
   const getDecisionExplanation = () => {
     if (!state?.decision?.underwriting_result) return null;
 
     if (state.decision.underwriting_result === 'APPROVED') {
-      return 'Loan within pre-approved limit. Credit score excellent. Instant approval granted.';
+      return 'All underwriting rules passed. Loan within pre-approved limit.';
     }
 
     if (state.decision.underwriting_result === 'REJECTED') {
@@ -892,6 +1035,61 @@ function UnderwritingDecisionPanel({ state }: { state: V3AdminState | null }) {
 
     return 'Underwriting in progress...';
   };
+
+  // Decision trigger rules
+  const getTriggerRules = () => {
+    if (!risk?.credit_score || !breakdown) return [];
+    const rules = [];
+
+    // Credit Score check (threshold: 700 for score-based, 600 for total)
+    const totalScore = breakdown.total?.score || 0;
+    rules.push({
+      name: 'Credit Score',
+      value: `${risk.credit_score}`,
+      threshold: '≥ 700 (total ≥ 700)',
+      pass: totalScore >= 700,
+      icon: totalScore >= 700 ? ArrowUpRight : ArrowDownRight,
+    });
+
+    // DTI check
+    if (risk.debt_to_income_ratio !== null && risk.debt_to_income_ratio !== undefined) {
+      rules.push({
+        name: 'DTI Ratio',
+        value: `${risk.debt_to_income_ratio.toFixed(1)}%`,
+        threshold: '< 50%',
+        pass: risk.debt_to_income_ratio < 50,
+        icon: risk.debt_to_income_ratio < 50 ? ArrowUpRight : ArrowDownRight,
+      });
+    }
+
+    // Loan vs Pre-approved Limit
+    if (state?.offer?.requested_amount && state?.offer?.pre_approved_limit) {
+      const withinLimit = state.offer.requested_amount <= state.offer.pre_approved_limit;
+      rules.push({
+        name: 'Loan vs Limit',
+        value: `₹${state.offer.requested_amount.toLocaleString('en-IN')}`,
+        threshold: `≤ ₹${state.offer.pre_approved_limit.toLocaleString('en-IN')}`,
+        pass: withinLimit,
+        icon: withinLimit ? ArrowUpRight : ArrowDownRight,
+      });
+    }
+
+    // Age check
+    if (risk.user_age) {
+      const ageOk = risk.user_age >= 21 && risk.user_age <= 60;
+      rules.push({
+        name: 'Age',
+        value: `${risk.user_age} years`,
+        threshold: '21-60',
+        pass: ageOk,
+        icon: ageOk ? ArrowUpRight : ArrowDownRight,
+      });
+    }
+
+    return rules;
+  };
+
+  const triggerRules = getTriggerRules();
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
@@ -963,6 +1161,32 @@ function UnderwritingDecisionPanel({ state }: { state: V3AdminState | null }) {
             </div>
           )}
 
+          {/* Approval/Rejection Trigger Rules */}
+          {triggerRules.length > 0 && (
+            <div className="pt-2 border-t border-gray-100">
+              <div className="flex items-center gap-1 mb-2">
+                <Target className="w-3.5 h-3.5 text-gray-400" />
+                <span className="text-xs font-medium text-gray-500">Decision Triggers</span>
+              </div>
+              <div className="space-y-1.5">
+                {triggerRules.map((rule) => {
+                  const Icon = rule.icon;
+                  return (
+                    <div key={rule.name} className={`flex items-center gap-2 p-1.5 rounded ${rule.pass ? 'bg-green-50' : 'bg-red-50'
+                      }`}>
+                      <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${rule.pass ? 'text-green-600' : 'text-red-500'
+                        }`} />
+                      <span className="text-[11px] text-gray-600 flex-1">{rule.name}</span>
+                      <span className={`text-[11px] font-semibold ${rule.pass ? 'text-green-700' : 'text-red-600'
+                        }`}>{rule.value}</span>
+                      <span className="text-[10px] text-gray-400">{rule.threshold}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Underwriting Status */}
           <div className="flex items-center justify-between">
             <span className="text-gray-600">Underwriting</span>
@@ -975,7 +1199,7 @@ function UnderwritingDecisionPanel({ state }: { state: V3AdminState | null }) {
           <div className="pt-2 mt-2 border-t border-gray-200">
             <p className="text-xs text-gray-400 italic flex items-center gap-1">
               <Shield className="w-3 h-3" />
-              Automated underwriting decision
+              Deterministic rule engine — fully auditable
             </p>
           </div>
         </div>
