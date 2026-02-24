@@ -503,6 +503,7 @@ export function ChatWidget() {
   // Once stage advances, upload button cannot reappear.
   // ================================================================
   const [currentStage, setCurrentStage] = useState<string>('GREETING');
+  const [rejectedAtStage, setRejectedAtStage] = useState<string | null>(null);
 
   // DERIVED: showUpload is driven by the backend's show_upload response flag
   // (Previously checked legacy 'INCOME_DOC_UPLOAD' stage which no longer exists)
@@ -895,6 +896,7 @@ export function ChatWidget() {
     setLoadingMessage('Processing...');
     // CRITICAL FIX: Reset stage to GREETING (showUpload is derived from this)
     setCurrentStage('GREETING');
+    setRejectedAtStage(null);
     setShowSanctionLetter(false);
     setLoanDetails(null);
     setCustomerName(null);
@@ -1128,6 +1130,9 @@ export function ChatWidget() {
       // showUpload is driven by the backend's show_upload flag
       // ================================================================
       if (newStage) {
+        if (newStage === 'REJECTION') {
+          setRejectedAtStage(currentStage);
+        }
         setCurrentStage(newStage);
       }
       // Sync showUpload from backend response
@@ -1569,6 +1574,9 @@ export function ChatWidget() {
 
       if (data.current_stage) {
         console.log(`📍 STAGE UPDATE (upload): ${currentStage} → ${data.current_stage}`);
+        if (data.current_stage === 'REJECTION') {
+          setRejectedAtStage(currentStage);
+        }
         setCurrentStage(data.current_stage);
       }
 
@@ -1880,7 +1888,7 @@ export function ChatWidget() {
 
             {/* ═══ STEP PROGRESS INDICATOR ═══ */}
             {(() => {
-              const stageInfo = STAGE_LABELS[currentStage];
+              const stageInfo = STAGE_LABELS[rejectedAtStage || currentStage];
               if (!stageInfo) return null;
               const pct = Math.round((stageInfo.step / stageInfo.total) * 100);
               return (

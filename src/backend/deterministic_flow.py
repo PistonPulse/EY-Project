@@ -1240,6 +1240,7 @@ class DeterministicFlowController:
                         session.identity_mismatch_reason = f"OCR Mismatch: Document says {extracted_pan}, User says {pan}"
                         session.is_frozen = True
                         session.freeze_reason = "OCR_DOCUMENT_MISMATCH"
+                        session.rejection_reason = f"Name mismatch on uploaded PAN document. Document: {extracted_pan}, Declared: {pan}"
                         session.current_stage = FlowStage.REJECTION
                         logger.error(f"[{session.session_id}] OCR PAN MISMATCH DETECTED: Document says {extracted_pan}, User says {pan}")
                         print(f"\n🚨 [FRAUD ALERT] Severe KYC failure. User entered {pan}, but their uploaded document contains {extracted_pan}.", flush=True)
@@ -1260,6 +1261,7 @@ class DeterministicFlowController:
                     session.identity_mismatch_reason = pan_check["reason"]
                     session.is_frozen = True
                     session.freeze_reason = pan_check["reason"]
+                    session.rejection_reason = f"Identity Verification Failed: {pan_check['reason']}"
                     session.current_stage = FlowStage.REJECTION
                     logger.error(f"[{session.session_id}] PAN MISMATCH DETECTED: {pan_check['reason']}")
                     return False
@@ -1853,18 +1855,20 @@ class DeterministicFlowController:
         
         # ------------------------------------------------------------
         # PROBLEM STATEMENT REQUIREMENT: Fetch Credit Score from API 5002
+        # (DISABLED: To ensure 100% deterministic underwriting based ONLY on 
+        # the user's uploaded salary and age, we bypass the mock bureau API)
         # ------------------------------------------------------------
-        if session.expected_pan:
-            try:
-                credit_response = requests.get(f"http://localhost:5002/api/credit/score/{session.expected_pan}", timeout=2)
-                if credit_response.status_code == 200:
-                    data = credit_response.json().get("data", {})
-                    bureau_score = data.get("credit_score")
-                    if bureau_score:
-                        session.credit_score = bureau_score # Override dynamic score with real bureau score
-                        logger.info(f"[{session.session_id}] Score fetched from Credit Bureau (Port 5002): {bureau_score}")
-            except Exception as e:
-                logger.warning(f"[{session.session_id}] Credit Bureau API (5002) unreachable: {e}")
+        # if session.expected_pan:
+        #     try:
+        #         credit_response = requests.get(f"http://localhost:5002/api/credit/score/{session.expected_pan}", timeout=2)
+        #         if credit_response.status_code == 200:
+        #             data = credit_response.json().get("data", {})
+        #             bureau_score = data.get("credit_score")
+        #             if bureau_score:
+        #                 session.credit_score = bureau_score # Override dynamic score with real bureau score
+        #                 logger.info(f"[{session.session_id}] Score fetched from Credit Bureau (Port 5002): {bureau_score}")
+        #     except Exception as e:
+        #         logger.warning(f"[{session.session_id}] Credit Bureau API (5002) unreachable: {e}")
         
         logger.info(f"[{session.session_id}] Final Underwriting Score: {session.credit_score}")
         logger.info(f"[{session.session_id}] Score Breakdown: {breakdown}")

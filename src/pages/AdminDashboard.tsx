@@ -698,10 +698,21 @@ function StageProgressionPanel({ state }: { state: V3AdminState | null }) {
 
   const getStageStatus = (stage: ConversationStage, index: number) => {
     if (!state || !currentStage) return 'pending';
-    if (currentStage === 'REJECTION' && stage === 'UNDERWRITING') return 'failed';
+
+    if (currentStage === 'REJECTION') {
+      if (stage === 'UNDERWRITING') return state.decision?.underwriting_complete ? 'completed' : 'failed';
+
+      if (!state.decision?.underwriting_complete) {
+        if (stage === 'TENURE_SELECTION' || stage === 'OFFER_DISCUSSION') return 'pending';
+        if (stage === 'KYC' && !state.kyc?.pan_verified) return 'failed';
+        if (stage === 'DOCUMENT_UPLOAD' && !state.kyc?.document_verified) return 'failed';
+      }
+      return index < STAGE_ORDER.indexOf('UNDERWRITING') ? 'completed' : 'pending';
+    }
+
     if (currentStage === stage) return 'current';
     if (index < currentStageIndex) return 'completed';
-    if (isFinalStage && index <= 14) return 'completed';
+    if (isFinalStage && index <= 15 && currentStage === 'SANCTION') return 'completed';
     return 'pending';
   };
 
@@ -1185,7 +1196,7 @@ function UnderwritingDecisionPanel({ state }: { state: V3AdminState | null }) {
           )}
 
           {/* Decision */}
-          {state.decision?.underwriting_result && (
+          {state.decision?.underwriting_result ? (
             <div className={`mt-3 p-3 rounded-lg ${state.decision.underwriting_result === 'APPROVED' ? 'bg-green-50 border border-green-200' :
               state.decision.underwriting_result === 'REJECTED' ? 'bg-red-50 border border-red-200' :
                 'bg-yellow-50 border border-yellow-200'
@@ -1205,6 +1216,14 @@ function UnderwritingDecisionPanel({ state }: { state: V3AdminState | null }) {
                 </span>
               </div>
               <p className="text-xs text-gray-600">{getDecisionExplanation()}</p>
+            </div>
+          ) : state.stage?.current_stage === 'REJECTION' && (
+            <div className="mt-3 p-3 rounded-lg bg-red-50 border border-red-200">
+              <div className="flex items-center gap-2 mb-1">
+                <XCircle className="w-5 h-5 text-red-600" />
+                <span className="font-bold text-red-700">REJECTED EARLY</span>
+              </div>
+              <p className="text-xs text-gray-600">{state.decision?.rejection_reason || 'Application rejected before underwriting phase.'}</p>
             </div>
           )}
 
@@ -1237,8 +1256,8 @@ function UnderwritingDecisionPanel({ state }: { state: V3AdminState | null }) {
           {/* Underwriting Status */}
           <div className="flex items-center justify-between">
             <span className="text-gray-600">Underwriting</span>
-            <span className={`font-medium ${state.decision?.underwriting_complete ? 'text-green-600' : 'text-yellow-600'}`}>
-              {state.decision?.underwriting_complete ? 'COMPLETE' : 'PENDING'}
+            <span className={`font-medium ${state.decision?.underwriting_complete ? 'text-green-600' : state.stage?.current_stage === 'REJECTION' ? 'text-gray-500' : 'text-yellow-600'}`}>
+              {state.decision?.underwriting_complete ? 'COMPLETE' : state.stage?.current_stage === 'REJECTION' ? 'SKIPPED' : 'PENDING'}
             </span>
           </div>
 

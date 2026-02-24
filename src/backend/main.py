@@ -359,6 +359,9 @@ def clean_ai_response(text: str) -> str:
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)  # **bold** → bold
     text = re.sub(r'\*(.+?)\*', r'\1', text)       # *italic* → italic
     
+    # 1.5 Fix apostrophe glitches (e.g., "I'\nm" → "I'm")
+    text = re.sub(r"([a-zA-Z])'\s*\n\s*([a-zA-Z])", r"\1'\2", text)
+    
     # 2. Fix split words (letter + space + lowercase letters at line boundary)
     # This catches things like "Ex cellent" → "Excellent"
     text = re.sub(r'(\w)\s*\n\s*(\w)', r'\1 \2', text)
@@ -367,8 +370,6 @@ def clean_ai_response(text: str) -> str:
     text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
     text = text.strip()
-    
-    return text
     
     return text
 
@@ -1121,6 +1122,7 @@ async def process_document_upload(file: UploadFile = File(...), session_id: str 
             
             extracted_name = extracted_data.get("name", "Unknown")
             extracted_pan = extracted_data.get("pan", "")
+            monthly_income_extracted = extracted_data.get("monthly_income")
             
             # PERFECT DEMO EXPERIENCE: If OCR fails or falls back to generic failure, 
             # we seamlessly use their real name to maintain the illusion of a perfect scan
@@ -1133,9 +1135,22 @@ async def process_document_upload(file: UploadFile = File(...), session_id: str 
             
             if extracted_pan:
                 session.extracted_pan = extracted_pan.strip().upper()
+                
+            # FRAUD DETECTION: Name Mismatch
+            # If the name is known, and it strictly doesn't match the declared name, flag it.
+            monthly_income = monthly_income_extracted
+            if extracted_name.lower() != "unknown" and session.user_name:
+                extracted_clean = extracted_name.lower().strip()
+                declared_clean = session.user_name.lower().strip()
+                # A mismatch occurs if neither string is inside the other
+                if extracted_clean not in declared_clean and declared_clean not in extracted_clean:
+                    print(f"🚨 FRAUD ALERT! Declared: {declared_clean}, Extracted: {extracted_clean}")
+                    monthly_income = "NAME_MISMATCH"
             
-            # Monthly income is calculated dynamically in fallback logic below
-            monthly_income = None 
+            # Artificial realistic delay if it hit the mock instantly
+            import asyncio
+            await asyncio.sleep(1.5)
+            
             
         except Exception as e:
             print(f"⚠️ OCR Pipeline Error: {e}")

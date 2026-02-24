@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 # Constants for Mock Fallback
 MOCK_USER_DATA = {
-    "tanish": {"name": "Tanish Gupta", "pan": "ABCDE1234F"},
-    "amit": {"name": "Amit Verma", "pan": "GHIJK5678M"}
+    "tanish": {"name": "Tanish Gupta", "pan": ""},
+    "amit": {"name": "Amit Verma", "pan": ""}
 }
 
 
@@ -22,10 +22,11 @@ def analyze_document_with_gemini_vision(file_bytes: bytes, mime_type: str = "app
     """
     import requests
 
-    ocr_api_key = os.getenv("GEMINI_OCR_API_KEY", "")
+    # Strip quotes since python-dotenv sometimes leaves them
+    ocr_api_key = (os.getenv("GEMINI_OCR_API_KEY") or os.getenv("GEMINI_API_KEY", "")).strip("\"'")
     if not ocr_api_key:
-        logger.warning("[OCR] GEMINI_OCR_API_KEY not set. Skipping Gemini Vision.")
-        raise ValueError("GEMINI_OCR_API_KEY not configured.")
+        logger.warning("[OCR] API keys not set. Skipping Gemini Vision.")
+        raise ValueError("API Keys not configured.")
 
     import base64
     encoded_data = base64.b64encode(file_bytes).decode("utf-8")
@@ -38,11 +39,11 @@ You must return a raw JSON object with no markdown formatting or backticks.
 
 Extract:
 1. "extracted_name": String. The exact name of the employee or account holder found on the document.
-2. "extracted_pan": String. If you can clearly see a PAN (Permanent Account Number) on the document, extract it. PAN format is 5 uppercase letters + 4 digits + 1 uppercase letter (e.g., ABCDE1234F). If not found, return "".
+2. "extracted_pan": String. If you can clearly see the EMPLOYEE'S Personal PAN (Permanent Account Number) on the document, extract it. IMPORTANT: DO NOT extract the Employer's, Company's, or Organization's PAN/TAN. If the only PAN visible belongs to the company, or if you are not certain it belongs to the employee, return "". PAN format is 5 uppercase letters + 4 digits + 1 uppercase letter (e.g., ABCDE1234F).
 3. "monthly_income": Number. The net monthly take-home salary. If not found, return 0.
 
 Example output:
-{"extracted_name": "Tanish Gupta", "extracted_pan": "ABCDE1234F", "monthly_income": 200000}"""
+{"extracted_name": "John Doe", "extracted_pan": "", "monthly_income": 85000}"""
 
     payload = {
         "contents": [{
@@ -77,10 +78,11 @@ Example output:
                     parsed = json.loads(result_text)
                     name = parsed.get("extracted_name", "Unknown")
                     pan = parsed.get("extracted_pan", "")
+                    monthly_income = parsed.get("monthly_income")
 
                     if name or pan:
-                        logger.info(f"[OCR] Gemini Vision extracted -> Name: {name}, PAN: {pan}")
-                        return {"name": name, "pan": pan.upper() if pan else ""}
+                        logger.info(f"[OCR] Gemini Vision extracted -> Name: {name}, PAN: {pan}, Income: {monthly_income}")
+                        return {"name": name, "pan": pan.upper() if pan else "", "monthly_income": monthly_income}
 
         elif resp.status_code == 429:
             logger.warning("[OCR] Gemini Vision rate limited (429).")
