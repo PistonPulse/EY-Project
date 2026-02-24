@@ -60,6 +60,7 @@ type ConversationStage =
   | 'MOBILE'
   | 'OTP'
   | 'INCOME'
+  | 'DOCUMENT_UPLOAD'
   | 'EXISTING_EMI'
   | 'DOB'
   | 'KYC'
@@ -95,6 +96,8 @@ interface V3AdminState {
     otp_attempts: number;
     pan_verified: boolean;
     pan_number: string | null;
+    document_verified?: boolean;
+    document_path?: string | null;
     identity_locked: boolean;
     identity_locked_at: string | null;
     identity_mismatch: boolean;
@@ -181,6 +184,7 @@ const STAGE_TO_AGENT: Record<ConversationStage, string> = {
   MOBILE: 'Verification',
   OTP: 'Verification',
   INCOME: 'Verification',
+  DOCUMENT_UPLOAD: 'Verification',
   EXISTING_EMI: 'Verification',
   DOB: 'Verification',
   KYC: 'Verification',
@@ -202,6 +206,7 @@ const STAGE_INFO: Record<ConversationStage, { name: string; description: string 
   MOBILE: { name: 'Mobile', description: 'Phone number' },
   OTP: { name: 'OTP', description: 'Verification' },
   INCOME: { name: 'Income', description: 'Financial check' },
+  DOCUMENT_UPLOAD: { name: 'Docs', description: 'OCR Check' },
   EXISTING_EMI: { name: 'EMI', description: 'Debt check' },
   DOB: { name: 'Age', description: 'DOB check' },
   KYC: { name: 'KYC', description: 'PAN verify' },
@@ -215,7 +220,7 @@ const STAGE_INFO: Record<ConversationStage, { name: string; description: string 
 // Ordered stages for pipeline visualization (V3 13-stage flow)
 const STAGE_ORDER: ConversationStage[] = [
   'GREETING', 'PURPOSE', 'AMOUNT', 'CITY', 'EMPLOYMENT_TYPE', 'NAME',
-  'MOBILE', 'OTP', 'INCOME', 'EXISTING_EMI', 'DOB', 'KYC', 'OFFER_DISCUSSION', 'TENURE_SELECTION', 'UNDERWRITING'
+  'MOBILE', 'OTP', 'INCOME', 'DOCUMENT_UPLOAD', 'EXISTING_EMI', 'DOB', 'KYC', 'OFFER_DISCUSSION', 'TENURE_SELECTION', 'UNDERWRITING'
 ];
 
 // ================================================================================
@@ -230,6 +235,7 @@ export function AdminDashboard() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
 
@@ -273,6 +279,13 @@ export function AdminDashboard() {
       setIsLoading(false);
     }
   }, []); // Empty dependency array - stable reference
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await fetchSessions();
+    // Add a minimum visual delay so the spin animation is noticeable
+    setTimeout(() => setIsRefreshing(false), 500);
+  };
 
   // Update ref when selectedSession changes (for selection tracking)
   useEffect(() => {
@@ -410,11 +423,12 @@ export function AdminDashboard() {
 
               {/* Refresh Button */}
               <button
-                onClick={() => fetchSessions()}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                onClick={handleManualRefresh}
+                disabled={isRefreshing}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
                 title="Refresh"
               >
-                <RefreshCw className="w-4 h-4 md:w-5 md:h-5 text-gray-600" />
+                <RefreshCw className={`w-4 h-4 md:w-5 md:h-5 text-gray-600 ${isRefreshing ? 'animate-spin' : ''}`} />
               </button>
 
               {/* Logout */}
@@ -642,6 +656,7 @@ const STAGE_CONTEXT_LABELS: Record<ConversationStage, string> = {
   MOBILE: 'Awaiting mobile number',
   OTP: 'Waiting for OTP verification',
   INCOME: 'Collecting monthly income',
+  DOCUMENT_UPLOAD: 'Awaiting salary slip upload',
   EXISTING_EMI: 'Collecting existing EMI obligations',
   DOB: 'Awaiting date of birth / age',
   KYC: 'Awaiting PAN for identity verification',
@@ -935,6 +950,38 @@ function VerificationDataPanel({ state }: { state: V3AdminState | null }) {
             <span className={`font-medium ${state.kyc?.pan_verified ? 'text-green-600' : 'text-gray-500'}`}>
               {state.kyc?.pan_verified ? 'VERIFIED' : 'PENDING'}
             </span>
+          </div>
+
+          <div className="flex flex-col gap-1.5 border-b border-gray-100 pb-2">
+            <div className="flex items-center justify-between">
+              <span className="text-gray-600">Docs Verified</span>
+              <span className={`font-medium ${state.kyc?.document_verified ? 'text-green-600' : 'text-gray-500'}`}>
+                {state.kyc?.document_verified ? 'VERIFIED' : 'PENDING'}
+              </span>
+            </div>
+            {state.kyc?.document_path && (
+              <div className="flex items-center justify-between bg-blue-50/50 p-2 rounded-lg border border-blue-100">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Salary Slip</span>
+                  <span className="text-xs text-blue-900 font-medium max-w-[120px] truncate" title={state.kyc.document_path}>
+                    {state.kyc.document_path}
+                  </span>
+                </div>
+                <a
+                  href={`http://localhost:8000/api/download-document/${state.session_id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1 text-xs font-medium text-blue-600 bg-white border border-blue-200 hover:bg-blue-50 hover:border-blue-300 transition-all rounded shadow-sm flex items-center gap-1 cursor-pointer z-50 relative pointer-events-auto"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                  }}
+                  title="View Salary Slip"
+                >
+                  <ArrowUpRight className="w-3 h-3" />
+                  View
+                </a>
+              </div>
+            )}
           </div>
 
           {/* Customer Info */}

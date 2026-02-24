@@ -12,10 +12,12 @@ interface SanctionLetterProps {
         tenure_months: number;
         monthly_emi: number;
     };
+    sessionId: string;
     onClose: () => void;
+    autoDownload?: boolean;
 }
 
-export const SanctionLetter: React.FC<SanctionLetterProps> = ({ customerName, loanDetails, onClose }) => {
+export const SanctionLetter: React.FC<SanctionLetterProps> = ({ customerName, loanDetails, sessionId, onClose, autoDownload = false }) => {
     const currentDate = new Date().toLocaleDateString('en-IN', {
         day: '2-digit',
         month: '2-digit',
@@ -93,7 +95,26 @@ export const SanctionLetter: React.FC<SanctionLetterProps> = ({ customerName, lo
                 heightLeft -= pageHeight;
             }
 
+            // Upload to backend for sync
+            try {
+                const pdfBlob = pdf.output('blob');
+                const formData = new FormData();
+                formData.append('file', pdfBlob, 'sanction_letter.pdf');
+
+                fetch(`http://localhost:8000/api/upload-sanction/${sessionId}`, {
+                    method: 'POST',
+                    body: formData
+                }).catch(err => console.error('Background upload failed:', err));
+            } catch (e) {
+                console.error('Error preparing upload:', e);
+            }
+
             pdf.save(`Sanction-Letter-${customerName.replace(/\s+/g, '-')}.pdf`);
+
+            // If this was an auto-download triggered externally, close the modal immediately
+            if (autoDownload) {
+                onClose();
+            }
         } catch (error: any) {
             console.error('Error generating PDF:', error);
             alert(`Failed to generate PDF: ${error.message || 'Unknown error'}. Please try printing instead.`);
@@ -102,8 +123,18 @@ export const SanctionLetter: React.FC<SanctionLetterProps> = ({ customerName, lo
         }
     };
 
+    React.useEffect(() => {
+        if (autoDownload && logoBase64) {
+            // slight delay to ensure DOM is fully rendered before canvas capture
+            const timer = setTimeout(() => {
+                handleDownload();
+            }, 500);
+            return () => clearTimeout(timer);
+        }
+    }, [autoDownload, logoBase64]);
+
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 sm:p-6 backdrop-blur-sm print:bg-white print:p-0">
+        <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-black/50 p-4 sm:p-6 backdrop-blur-sm print:bg-white print:p-0">
             <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto print:shadow-none print:w-full print:max-w-none print:h-auto print:overflow-visible">
 
                 {/* Modal Header - Hidden in Print */}

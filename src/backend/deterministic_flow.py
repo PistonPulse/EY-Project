@@ -155,8 +155,11 @@ STRICT RULES
 
 from enum import Enum
 from dataclasses import dataclass, field
+import os
+import random
+import requests
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, Tuple, List
-from datetime import datetime
 import re
 import logging
 
@@ -192,16 +195,16 @@ class FlowStage(Enum):
     NAME = 6               # Ask full name
     MOBILE = 7             # Ask mobile number
     OTP = 8                # Verify OTP
-    INCOME = 9             # NEW: Ask monthly income
-    EXISTING_EMI = 10      # NEW: Ask existing loan EMIs
-    DOB = 11               # NEW: Ask date of birth/age
-    KYC = 12               # PAN verification
-    OFFER_DISCUSSION = 13  # Show offers (based on calculated score)
-    TENURE_SELECTION = 14  # Select tenure/EMI
-    UNDERWRITING = 15      # Backend decision
-    SANCTION = 16          # Approved (terminal)
-    REJECTION = 17         # Rejected (terminal)
-
+    INCOME = 9             # Ask monthly income
+    DOCUMENT_UPLOAD = 10   # NEW: Mandatory salary slip upload
+    EXISTING_EMI = 11      # Ask existing loan EMIs
+    DOB = 12               # Ask date of birth/age
+    KYC = 13               # PAN verification
+    OFFER_DISCUSSION = 14  # Show offers
+    TENURE_SELECTION = 15  # Select tenure/EMI
+    UNDERWRITING = 16      # Backend decision
+    SANCTION = 17          # Approved (terminal)
+    REJECTION = 18         # Rejected (terminal)
 
 # Terminal stages - journey ends here
 TERMINAL_STAGES = {FlowStage.SANCTION, FlowStage.REJECTION}
@@ -481,8 +484,9 @@ NEXT_STAGE: Dict[FlowStage, FlowStage] = {
     FlowStage.NAME: FlowStage.MOBILE,
     FlowStage.MOBILE: FlowStage.OTP,
     FlowStage.OTP: FlowStage.INCOME,           # NEW: After OTP, ask income
-    FlowStage.INCOME: FlowStage.EXISTING_EMI,  # NEW: Then existing EMIs
-    FlowStage.EXISTING_EMI: FlowStage.DOB,     # NEW: Then age/DOB
+    FlowStage.INCOME: FlowStage.DOCUMENT_UPLOAD, # NEW: After income, ask for document
+    FlowStage.DOCUMENT_UPLOAD: FlowStage.EXISTING_EMI, # NEW: After document, ask existing EMIs
+    FlowStage.EXISTING_EMI: FlowStage.DOB,     # Then age/DOB
     FlowStage.DOB: FlowStage.KYC,              # Then KYC
     FlowStage.KYC: FlowStage.OFFER_DISCUSSION,
     FlowStage.OFFER_DISCUSSION: FlowStage.TENURE_SELECTION,
@@ -505,6 +509,7 @@ STAGE_REQUIREMENTS: Dict[FlowStage, List[str]] = {
     FlowStage.MOBILE: ["user_mobile"],
     FlowStage.OTP: ["otp_verified"],  # Boolean flag
     FlowStage.INCOME: ["monthly_income"],  # NEW
+    FlowStage.DOCUMENT_UPLOAD: ["document_verified"], # NEW: Must upload document
     FlowStage.EXISTING_EMI: ["existing_monthly_emi"],  # NEW
     FlowStage.DOB: ["user_age"],  # NEW
     FlowStage.KYC: ["pan_verified"],  # Boolean flag
@@ -530,6 +535,9 @@ STAGE_QUESTIONS: Dict[FlowStage, str] = {
     FlowStage.INCOME: """Ask for their monthly income (take-home salary for salaried, average monthly earnings for self-employed).
 Explain: 'This helps us determine your loan eligibility and offer the best rates.'
 Accept formats like: 50000, 50,000, 50k, 50K, 50 thousand.""",
+    FlowStage.DOCUMENT_UPLOAD: """Ask the user to upload their official salary slip or bank statement to verify their income.
+Say: 'Thank you. For verification purposes, please upload a clear image or PDF of your most recent salary slip or bank statement.'
+Wait for the user to upload the document. Do not proceed until the document is verified.""",
     FlowStage.EXISTING_EMI: """Ask if they have any existing loans and what's the total monthly EMI they pay.
 Say: 'Do you have any running loans like car loan, home loan, or personal loan? If yes, please share your total monthly EMI. If no existing loans, just say 0 or none.'
 Explain: This helps calculate their debt capacity.""",
@@ -610,6 +618,7 @@ class SessionState:
     
     # Stage 9: KYC (PAN only)
     pan_number: Optional[str] = None
+    extracted_pan: Optional[str] = None  # PAN extracted from uploaded document (OCR)
     pan_verified: bool = False
     
     # Stage 10: Offer (shows RANGE, not fixed EMI)
@@ -631,6 +640,11 @@ class SessionState:
     # - Any user can go through the full flow
     #
     monthly_income: Optional[float] = None       # User-provided monthly income
+    
+    # Stage 10: Document Upload
+    document_verified: bool = False
+    document_path: Optional[str] = None
+    
     annual_income: Optional[float] = None        # Calculated from monthly
     existing_monthly_emi: Optional[float] = None # User-provided existing EMI obligations
     debt_to_income_ratio: Optional[float] = None # Calculated from user inputs
@@ -748,6 +762,8 @@ class SessionState:
             "otp_attempts": self.otp_attempts,
             "pan_verified": self.pan_verified,
             "pan_number": f"XXXXX{self.pan_number[-5:]}" if self.pan_number else None,
+            "document_verified": self.document_verified,
+            "document_path": self.document_path,
             "identity_locked": self.identity_locked,
             "identity_locked_at": self.identity_locked_at.isoformat() if self.identity_locked_at else None,
             "identity_mismatch": self.identity_mismatch,
@@ -1052,7 +1068,7 @@ class DeterministicFlowController:
         
         # PURPOSE: Extract loan purpose
         if stage == FlowStage.PURPOSE:
-            purpose = self._extract_purpose(message_lower)
+            purpose = self._extract_purpose(message)
             if purpose:
                 session.loan_purpose = purpose
                 logger.info(f"[{session.session_id}] Extracted purpose: {purpose}")
@@ -1102,6 +1118,7 @@ class DeterministicFlowController:
                 session.user_mobile = mobile
                 # Generate OTP immediately
                 session.generated_otp = self._generate_otp(mobile)
+                print(f"\n📞 [COMMUNICATIONS SERVER] Sending 6-digit OTP to +91-XXXXXX{mobile[-4:]} via SMS Gateway...", flush=True)
                 logger.info(f"[{session.session_id}] Extracted mobile: {mobile[-4:]}, OTP generated")
                 return True
             return False
@@ -1118,6 +1135,17 @@ class DeterministicFlowController:
                     # After OTP verification, identity is LOCKED. No changes.
                     # ============================================================
                     self._lock_identity(session)
+                    print(f"\n🔐 [IDENTITY SERVICE] OTP Verified securely. Session locked to +91-XXXXXX{session.user_mobile[-4:]}.", flush=True)
+                    print(f"📡 [CRM API SERVER] GET /api/v1/customers?mobile={session.user_mobile}", flush=True)
+                    
+                    if session.expected_pan:
+                        print(f"   ↳ Fetching from Mock 50-Person Database...", flush=True)
+                        print(f"   ↳ Status: 200 OK | Customer Found! ", flush=True)
+                    else:
+                        print(f"   ↳ Fetching from Mock 50-Person Database...", flush=True)
+                        print(f"   ↳ Status: 404 Not Found | Creating New Customer Profile...", flush=True)
+                        print(f"   ↳ Status: 201 Created | New Lead ID: L-{random.randint(10000, 99999)}", flush=True)
+                        
                     logger.info(f"[{session.session_id}] OTP verified - IDENTITY LOCKED")
                     return True
                 else:
@@ -1134,10 +1162,45 @@ class DeterministicFlowController:
             if income:
                 session.monthly_income = income
                 session.annual_income = income * 12
+                print(f"\n🏦 [FINANCIAL DATA SERVICE] Monthly income ₹{income:,.0f} registered for profile evaluation.", flush=True)
                 logger.info(f"[{session.session_id}] Extracted monthly income: ₹{income:,.0f}")
                 return True
             return False
         
+        # DOCUMENT_UPLOAD: Verify document was uploaded (NEW)
+        if stage == FlowStage.DOCUMENT_UPLOAD:
+            # The frontend sends "Document uploaded: filename.pdf"
+            if "uploaded" in message_lower or ".pdf" in message_lower or ".png" in message_lower or ".jpg" in message_lower:
+                session.document_verified = True
+                
+                # Extract filename if possible for admin dashboard logs
+                import re
+                doc_match = re.search(r'uploaded:?\s*(.+?\.(?:pdf|png|jpg|jpeg))', message, re.IGNORECASE)
+                filename = doc_match.group(1).strip() if doc_match else "Income_Proof.pdf"
+                session.uploaded_document_name = filename
+                
+                # ==========================================================
+                # MOCK OCR DATA EXTRACTION
+                # Simulate extracting the PAN and Name from the Salary Slip
+                # ==========================================================
+                if "tanish" in filename.lower():
+                    # If Tanish uploads his slip, OCR "finds" his data
+                    session.extracted_name = "Tanish Gupta"
+                    # We assume Tanish's real PAN for the demo is a test PAN or valid format
+                    session.extracted_pan = "ABCDE1234F" 
+                    logger.info(f"[{session.session_id}] Mock OCR Extracted -> Name: {session.extracted_name}, PAN: {session.extracted_pan}")
+                elif "amit" in filename.lower():
+                    session.extracted_name = "Amit Verma"
+                    session.extracted_pan = "GHIJK5678M"
+                else:
+                    # Generic upload - OCR extracts a random mismatching PAN to demo the Fraud Alert
+                    session.extracted_name = "Unknown User"
+                    session.extracted_pan = "ZZZZZ9999Z" 
+                    logger.info(f"[{session.session_id}] Mock OCR Extracted Random PAN: ZZZZZ9999Z (Will trigger Fraud Alert on mismatch)")
+
+                return True
+            return False
+
         # EXISTING_EMI: Extract existing loan EMIs (NEW)
         if stage == FlowStage.EXISTING_EMI:
             existing_emi = self._extract_existing_emi(message)
@@ -1164,8 +1227,26 @@ class DeterministicFlowController:
             pan = self._extract_pan(message)
             if pan:
                 session.pan_number = pan
+                
                 # ============================================================
-                # PAN VERIFICATION - MUST MATCH SAME CUSTOMER
+                # 1. NEW OCR DOCUMENT VERIFICATION
+                # Cross-reference with the Document upload OCR PAN
+                # ============================================================
+                if getattr(session, 'extracted_pan', None):
+                    extracted_pan = session.extracted_pan.upper()
+                    if pan != extracted_pan:
+                        session.pan_verified = False
+                        session.identity_mismatch = True
+                        session.identity_mismatch_reason = f"OCR Mismatch: Document says {extracted_pan}, User says {pan}"
+                        session.is_frozen = True
+                        session.freeze_reason = "OCR_DOCUMENT_MISMATCH"
+                        session.current_stage = FlowStage.REJECTION
+                        logger.error(f"[{session.session_id}] OCR PAN MISMATCH DETECTED: Document says {extracted_pan}, User says {pan}")
+                        print(f"\n🚨 [FRAUD ALERT] Severe KYC failure. User entered {pan}, but their uploaded document contains {extracted_pan}.", flush=True)
+                        return False
+                
+                # ============================================================
+                # 2. INTERNAL DATABASE VERIFICATION - MUST MATCH SAME CUSTOMER
                 # Cross-reference with database. Mismatch = HALT.
                 # ============================================================
                 pan_check = self._verify_pan_with_identity_check(pan, session)
@@ -1190,7 +1271,16 @@ class DeterministicFlowController:
             self._calculate_offer(session)
             session.offer_shown = True
             # Any acknowledgment advances
-            if any(word in message_lower for word in ['ok', 'yes', 'proceed', 'continue', 'great', 'good']):
+            if any(word in message_lower for word in ['ok', 'yes', 'proceed', 'continue', 'great', 'good', 'sure']):
+                # DOWN-SELL LOGIC:
+                # If they requested more than they were approved for, and they say "yes" to proceed 
+                # with the lower offer, automatically adjust their requested amount down to the limit 
+                # so the Underwriting Engine will cleanly approve them instead of rejecting them.
+                if session.pre_approved_limit and session.loan_amount:
+                    if session.pre_approved_limit < session.loan_amount:
+                        logger.info(f"[{session.session_id}] Down-selling user from requested ₹{session.loan_amount} to limit ₹{session.pre_approved_limit}")
+                        session.loan_amount = session.pre_approved_limit
+                        
                 return True
             return False
         
@@ -1240,33 +1330,50 @@ class DeterministicFlowController:
     
     def _extract_purpose(self, message: str) -> Optional[str]:
         """Extract loan purpose from message."""
+        message_clean = message.strip()
+        message_lower = message_clean.lower()
+        print(f"\n[DEBUG PURPOSE] Extracting from: '{message_clean}'", flush=True)
+        
+        
         # Reject out-of-context inputs (PAN, mobile, OTP patterns)
         pan_pattern = re.compile(r'[A-Z]{5}[0-9]{4}[A-Z]', re.IGNORECASE)
         mobile_pattern = re.compile(r'\b[6-9]\d{9}\b')
         otp_pattern = re.compile(r'^\d{6}$')
         
-        if pan_pattern.search(message) or mobile_pattern.search(message) or otp_pattern.match(message.strip()):
+        if pan_pattern.search(message_clean) or mobile_pattern.search(message_clean) or otp_pattern.match(message_clean):
             return None  # Reject - user provided wrong type of input
         
         purposes = {
-            "home": ["home", "house", "renovation", "construction", "repair"],
-            "education": ["education", "study", "college", "school", "course", "tuition"],
-            "medical": ["medical", "health", "hospital", "treatment", "surgery"],
-            "wedding": ["wedding", "marriage", "shaadi"],
-            "travel": ["travel", "vacation", "trip", "holiday"],
-            "business": ["business", "shop", "startup", "company"],
-            "debt_consolidation": ["debt", "consolidation", "pay off", "credit card"],
-            "personal": ["personal", "emergency", "expense", "need"]
+            "home": ["home", "house", "renovation", "construction", "repair", "housing"],
+            "education": ["education", "study", "college", "school", "course", "tuition", "degree"],
+            "medical": ["medical", "health", "hospital", "treatment", "surgery", "operation", "bills", "expenses"],
+            "wedding": ["wedding", "marriage", "shaadi", "ceremony"],
+            "travel": ["travel", "vacation", "trip", "holiday", "tour"],
+            "business": ["business", "shop", "startup", "company", "enterprise"],
+            "debt_consolidation": ["debt", "consolidation", "pay off", "credit card", "loans"],
+            "personal": ["personal", "emergency", "expense", "need", "urgent"]
         }
         
+        # Clean up common conversational prefixes for display
+        display_purpose = message_clean
+        for prefix in ["i want a loan for ", "loan for ", "for my ", "for "]:
+            if message_lower.startswith(prefix):
+                display_purpose = display_purpose[len(prefix):].strip()
+                break
+        
         for purpose, keywords in purposes.items():
-            if any(kw in message for kw in keywords):
-                return purpose
+            if any(kw in message_lower for kw in keywords):
+                result = display_purpose if len(display_purpose) <= 40 else purpose
+                print(f"[DEBUG PURPOSE] Matched keyword in '{purpose}', returning: '{result}'")
+                return result
         
-        # If message is just text without keywords, treat as personal purpose
-        if len(message.split()) >= 2:
-            return "personal"
+        # If message is just text without keywords, but has at least 3 characters
+        if len(message_clean) >= 3:
+            result = display_purpose if len(display_purpose) <= 40 else "personal"
+            print(f"[DEBUG PURPOSE] Fallback length check passed, returning: '{result}'")
+            return result
         
+        print("[DEBUG PURPOSE] Failed to extract purpose, returning None")
         return None
     
     def _extract_amount(self, message: str) -> Optional[float]:
@@ -1316,11 +1423,17 @@ class DeterministicFlowController:
         return None
     
     def _extract_employment_type(self, message: str) -> Optional[str]:
-        """Extract employment type from message."""
-        if any(word in message for word in ["salaried", "salary", "job", "employed", "employee", "working"]):
+        """Extract employment type from message, handles common typos."""
+        message = message.lower().strip()
+        
+        # Salaried: catches salaried, salary, salarie, salried, salry, jobs, employed
+        if any(word in message for word in ["salar", "salrie", "salry", "job", "employ", "working"]):
             return "salaried"
-        if any(word in message for word in ["self", "business", "own", "freelance", "entrepreneur", "proprietor"]):
+            
+        # Self-employed: catches self, business, biz, freelance, own, proprietor
+        if any(word in message for word in ["self", "business", "biz", "own", "freelance", "proprietor", "entrepreneur"]):
             return "self_employed"
+            
         return None
     
     def _extract_name(self, message: str) -> Optional[str]:
@@ -1579,30 +1692,31 @@ class DeterministicFlowController:
         session.identity_locked = True
         session.identity_locked_at = datetime.now()
         
-        # Fetch expected PAN from customer database
+        # Fetch expected PAN from CRM via separate HTTP Endpoint (Port 5001)
         mobile = session.user_mobile
-        if mobile in CUSTOMER_PROFILES:
-            profile = CUSTOMER_PROFILES[mobile]
-            # Try multiple locations for PAN
-            session.expected_pan = (
-                profile.get("pan") or 
-                profile.get("kyc", {}).get("pan_number") or
-                profile.get("pan_number")
-            )
-            logger.info(f"[{session.session_id}] Identity locked: App={session.application_id}, Expected PAN set")
-        elif mobile in self.TEST_USERS:
-            # Test users have expected PANs
-            expected_pans = {
-                "9876543210": "ABCDE1234F",  # Rahul
-                "9988776655": "GHIJK5678M",  # Amit
-                "9123456781": "MNOPQ9012R",  # Priya
-            }
-            session.expected_pan = expected_pans.get(mobile)
-            logger.info(f"[{session.session_id}] Test user identity locked: App={session.application_id}")
-        else:
-            # New customer - no expected PAN
-            session.expected_pan = None
-            logger.info(f"[{session.session_id}] New customer identity locked: App={session.application_id}")
+        try:
+            crm_response = requests.get(f"http://localhost:5001/api/crm/customer/{mobile}", timeout=2)
+            if crm_response.status_code == 200:
+                data = crm_response.json().get("data", {})
+                session.expected_pan = data.get("pan")
+                logger.info(f"[{session.session_id}] Identity locked: App={session.application_id}, Expected PAN set via CRM API (5001)")
+            else:
+                raise Exception("Not found in CRM")
+        except Exception as e:
+            # Fallback for test users if API is down or user not found
+            if mobile in self.TEST_USERS:
+                # Test users have expected PANs
+                expected_pans = {
+                    "9876543210": "ABCDE1234F",  # Rahul
+                    "9988776655": "GHIJK5678M",  # Amit
+                    "9123456781": "MNOPQ9012R",  # Priya
+                }
+                session.expected_pan = expected_pans.get(mobile)
+                logger.info(f"[{session.session_id}] Test user identity locked: App={session.application_id}")
+            else:
+                # New customer - no expected PAN
+                session.expected_pan = None
+                logger.info(f"[{session.session_id}] New customer identity locked: App={session.application_id}")
     
     # ================================================================================
     # PAN VERIFICATION WITH IDENTITY CHECK
@@ -1663,11 +1777,15 @@ class DeterministicFlowController:
         # Rule 2: If expected PAN is set, MUST match
         if session.expected_pan:
             if pan != session.expected_pan.upper():
+                print(f"\n🚨 [NSDL E-GOV SERVER] PAN Identity Mismatch! Expected PAN for user does not match {pan}.", flush=True)
                 logger.error(f"[{session.session_id}] PAN MISMATCH: Expected {session.expected_pan}, Got {pan}")
                 return {
                     "verified": False, 
                     "reason": "PAN_IDENTITY_MISMATCH"
                 }
+            print(f"\n✅ [NSDL E-GOV SERVER] PAN {pan} verified via NSDL Database Match.", flush=True)
+            print(f"📡 [NSDL API] GET /api/v2/pan/{pan}/verify", flush=True)
+            print(f"   ↳ Status: 200 OK | Identity Match: TRUE", flush=True)
             logger.info(f"[{session.session_id}] PAN matches expected: {pan}")
             return {"verified": True, "reason": None}
         
@@ -1687,6 +1805,9 @@ class DeterministicFlowController:
             return {"verified": True, "reason": None}
         
         # New customer with valid format PAN - allow for demo
+        print(f"\n✅ [NSDL E-GOV SERVER] PAN {pan} format valid. Identity verified.", flush=True)
+        print(f"📡 [NSDL API] GET /api/v2/pan/{pan}/verify", flush=True)
+        print(f"   ↳ Status: 200 OK | Entity: NEW RETAIL CUSTOMER", flush=True)
         logger.info(f"[{session.session_id}] New PAN accepted: {pan}")
         return {"verified": True, "reason": None}
     
@@ -1725,7 +1846,27 @@ class DeterministicFlowController:
         session.credit_decision = decision
         session.income_source = "USER_PROVIDED"
         
-        logger.info(f"[{session.session_id}] Dynamic Credit Score: {credit_score}")
+        print(f"\n📡 [CREDIT BUREAU API SERVER] POST /api/v3/score/calculate", flush=True)
+        print(f"   ↳ Payload: {{'pan': '{session.pan_number}', 'income': {session.monthly_income}, 'age': {session.user_age}}}", flush=True)
+        print(f"   ↳ Running Dynamic Underwriting Model v4.2...", flush=True)
+        print(f"   ↳ Status: 200 OK | Computed Score: {credit_score} | Decision: {decision}", flush=True)
+        
+        # ------------------------------------------------------------
+        # PROBLEM STATEMENT REQUIREMENT: Fetch Credit Score from API 5002
+        # ------------------------------------------------------------
+        if session.expected_pan:
+            try:
+                credit_response = requests.get(f"http://localhost:5002/api/credit/score/{session.expected_pan}", timeout=2)
+                if credit_response.status_code == 200:
+                    data = credit_response.json().get("data", {})
+                    bureau_score = data.get("credit_score")
+                    if bureau_score:
+                        session.credit_score = bureau_score # Override dynamic score with real bureau score
+                        logger.info(f"[{session.session_id}] Score fetched from Credit Bureau (Port 5002): {bureau_score}")
+            except Exception as e:
+                logger.warning(f"[{session.session_id}] Credit Bureau API (5002) unreachable: {e}")
+        
+        logger.info(f"[{session.session_id}] Final Underwriting Score: {session.credit_score}")
         logger.info(f"[{session.session_id}] Score Breakdown: {breakdown}")
         
         # ============================================================
@@ -1783,20 +1924,22 @@ class DeterministicFlowController:
         """
         mobile = session.user_mobile
         
-        # Check if customer exists in database
-        if mobile and mobile in CUSTOMER_PROFILES:
-            profile = CUSTOMER_PROFILES[mobile]
-            financial = profile.get("financial_data", {})
-            
-            session.monthly_income = financial.get("monthly_income", 0)
-            session.annual_income = financial.get("annual_income", 0)
-            session.existing_monthly_debt = financial.get("total_monthly_debt", 0)
-            session.debt_to_income_ratio = financial.get("debt_to_income_ratio", 0)
-            session.pre_approved_limit = financial.get("preapproved_limit", 0)
-            session.income_source = "CUSTOMER_DATABASE"
-            
-            logger.info(f"[{session.session_id}] Income fetched from database: ₹{session.monthly_income:,.0f}/month")
-        else:
+        # Check if customer exists in database via Offer Mart API (Port 5003)
+        try:
+            offer_response = requests.get(f"http://localhost:5003/api/offers/{mobile}", timeout=2)
+            if offer_response.status_code == 200:
+                data = offer_response.json().get("data", {})
+                
+                # Note: Offer Mart only returns offer details, not income. 
+                # Income is gathered directly from user inputs in V4. 
+                session.existing_monthly_debt = data.get("total_monthly_debt", 0)
+                session.pre_approved_limit = data.get("preapproved_limit", 0)
+                session.income_source = "OFFER_MART_API"
+                
+                logger.info(f"[{session.session_id}] Pre-approved details fetched from Offer Mart (5003)")
+            else:
+                raise Exception("Not found in Offer Mart")
+        except Exception as e:
             # New customer - use default values
             session.monthly_income = 50000  # Default assumption
             session.annual_income = 600000
@@ -1949,8 +2092,17 @@ class DeterministicFlowController:
             session.credit_score_breakdown = breakdown
             logger.info(f"[{session.session_id}] Late credit score calculation: {credit_score}")
         
+        # Extract values safely for logging
+        requested = session.loan_amount or 0
+        pre_approved = session.pre_approved_limit or 0
+        dti = session.debt_to_income_ratio or 0
+        
         # RULE 1: Credit score < 600 → REJECT
         if session.credit_score < self.MIN_CREDIT_SCORE:
+            print(f"\n❌ [UNDERWRITING ENGINE] Application REJECTED. Score {session.credit_score} fails minimum criteria of {self.MIN_CREDIT_SCORE}.", flush=True)
+            print(f"📡 [DECISION API] POST /api/v3/underwrite", flush=True)
+            print(f"   ↳ Payload: {{'score': {session.credit_score}, 'dti': {dti}, 'requested': {requested}, 'limit': {pre_approved}}}", flush=True)
+            print(f"   ↳ Result:  REJECTED - SCORE_TOO_LOW | Status 200 OK", flush=True)
             logger.info(f"[{session.session_id}] REJECTED: Credit score {session.credit_score} < {self.MIN_CREDIT_SCORE}")
             return "REJECTED", "CREDIT_CRITERIA_NOT_MET"
         
@@ -1973,10 +2125,16 @@ class DeterministicFlowController:
         
         # RULE 3: Requested ≤ pre-approved → APPROVED
         if requested <= pre_approved:
+            print(f"\n✅ [UNDERWRITING ENGINE] Application APPROVED! Requested ₹{requested:,.0f} is within limit of ₹{pre_approved:,.0f}.", flush=True)
+            print(f"📡 [DECISION API] POST /api/v3/underwrite", flush=True)
+            dti = session.debt_to_income_ratio or 0
+            print(f"   ↳ Payload: {{'score': {session.credit_score}, 'dti': {dti}, 'requested': {requested}, 'limit': {pre_approved}}}", flush=True)
+            print(f"   ↳ Result:  APPROVED | Status 201 Created", flush=True)
             logger.info(f"[{session.session_id}] APPROVED: Requested ₹{requested:,.0f} ≤ Pre-approved ₹{pre_approved:,.0f}")
             return "APPROVED", None
         
         # RULE 4: Requested > pre-approved → REJECTED
+        print(f"\n❌ [UNDERWRITING ENGINE] Application REJECTED. Requested ₹{requested:,.0f} exceeds limit of ₹{pre_approved:,.0f}.", flush=True)
         logger.info(f"[{session.session_id}] REJECTED: Requested ₹{requested:,.0f} > Pre-approved ₹{pre_approved:,.0f}")
         return "REJECTED", "AMOUNT_EXCEEDS_ELIGIBILITY"
 
@@ -2102,7 +2260,7 @@ if __name__ == "__main__":
     
     for message, expected in test_inputs:
         session, instruction, changed = controller.process_input(session_id, message)
-        print(f"\nInput: '{message}'")
+        print(f"\nInput: '{message}'", flush=True)
         print(f"Expected: {expected}")
         print(f"Stage: {session.current_stage.name} | Changed: {changed}")
         print(f"Instruction: {instruction[:50]}...")

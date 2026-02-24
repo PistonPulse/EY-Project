@@ -55,11 +55,18 @@ class Settings(BaseSettings):
     GEMINI_TIMEOUT_SECONDS: int = 8
     GEMINI_MAX_TOKENS: int = 200
     GEMINI_TEMPERATURE: float = 0.3
+    USE_GEMINI: str = "true"
 
     # ── Groq Fallback (when Gemini fails/times out) ──────────────────────
     GROQ_API_KEY: str = ""
     GROQ_MODEL_NAME: str = "llama-3.1-8b-instant"
     GROQ_TIMEOUT_SECONDS: int = 6
+
+    # ── Local LLM (Ollama / LM Studio / LocalAI — OpenAI-compatible) ──
+    LOCAL_LLM_URL: str = "http://localhost:11434/v1"
+    LOCAL_LLM_MODEL: str = "llama3"
+    LOCAL_LLM_TIMEOUT_SECONDS: int = 15
+    LOCAL_LLM_ENABLED: bool = True
 
     # ── Database ─────────────────────────────────────────────────────────
     DATABASE_URL: str = "sqlite:///./lending_platform.db"

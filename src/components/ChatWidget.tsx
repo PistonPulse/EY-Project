@@ -1,4 +1,4 @@
-import { MessageCircle, X, Send, Upload, Download, CheckCircle, RotateCcw, Clock, Eye, FileText } from 'lucide-react';
+import { MessageCircle, X, Send, Upload, Download, CheckCircle, RotateCcw, Clock, Eye, FileText, Maximize2, Minimize2 } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import tataLogo from "../assets/Tata_Capital_Logo-01.jpg";
 import jsPDF from 'jspdf';
@@ -188,6 +188,23 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
     ]
   },
 
+  // Stage 11.5: DOCUMENT_UPLOAD - Gemini Vision OCR
+  DOCUMENT_UPLOAD: {
+    duration: 5500,
+    loadingText: 'Analyzing Document...',
+    description: 'Processing document via Tata Vision AI',
+    steps: [
+      'Uploading securely to server...',
+      'Initializing AI Vision Engine...',
+      'Scanning document structure...',
+      'Extracting name and verification data...',
+      'Validating income figures...',
+      'Cross-referencing declared values...',
+      'Finalizing verification...'
+    ]
+  },
+
+
   // Stage 12: KYC - PAN verification (important identity step)
   KYC: {
     duration: 6000,
@@ -280,56 +297,12 @@ const VERIFICATION_DELAYS: Record<string, VerificationDelay> = {
       'Recording rejection reason...',
       'Updating application status...'
     ]
-  },
-
-  // Legacy stage names for backwards compatibility
-  NEEDS_ANALYSIS: {
-    duration: 1000,
-    loadingText: 'Understanding your requirements...',
-    description: 'Analyzing loan needs'
-  },
-  KYC_COLLECTION: {
-    duration: 1200,
-    loadingText: 'Preparing verification...',
-    description: 'Setting up identity verification'
-  },
-  KYC_VERIFICATION: {
-    duration: 2500,
-    loadingText: 'Verifying your identity...',
-    description: 'OTP verification with telecom gateway'
-  },
-  OFFER_CHECK: {
-    duration: 2000,
-    loadingText: 'Checking pre-approved offers...',
-    description: 'Querying offer management system'
-  },
-  CREDIT_CHECK: {
-    duration: 2500,
-    loadingText: 'Fetching credit score from bureau...',
-    description: 'CIBIL/Experian API call simulation'
-  },
-  UNDERWRITING_DECISION: {
-    duration: 3000,
-    loadingText: 'Evaluating your application...',
-    description: 'Risk assessment and eligibility calculation'
   }
 };
 
-// Helper function to get delay config for a stage
-const getDelayConfig = (stage: string): VerificationDelay => {
-  const config = VERIFICATION_DELAYS[stage];
-  if (!config) {
-    console.warn(`⚠️ No delay config found for stage: "${stage}", using fallback`);
-    console.log('Available stages:', Object.keys(VERIFICATION_DELAYS));
-  } else {
-    console.log(`✅ Using delay config for stage: "${stage}" - ${config.loadingText}`);
-  }
-  return config || {
-    duration: 800,
-    loadingText: 'Processing...',
-    description: 'Default processing'
-  };
-};
+
+
+
 
 // ================================================================================
 // PHASE 10: TONE MANAGEMENT
@@ -495,10 +468,12 @@ How may I assist you today?`;
 
 export function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('Processing...');
+  const [loadingScenario, setLoadingScenario] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string>(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
 
   // ================================================================
@@ -532,12 +507,15 @@ export function ChatWidget() {
   // DERIVED: showUpload is driven by the backend's show_upload response flag
   // (Previously checked legacy 'INCOME_DOC_UPLOAD' stage which no longer exists)
   const [showUploadFlag, setShowUploadFlag] = useState(false);
+  const [showSanctionLetter, setShowSanctionLetter] = useState(false);
+  const [showLetterModal, setShowLetterModal] = useState(false);
+  const [isAutoDownloading, setIsAutoDownloading] = useState(false);
+
+  // Confetti state - triggered on sanction logic
+  const [showConfetti, setShowConfetti] = useState(false);
   const showUpload = showUploadFlag;
 
 
-  const [showLetterModal, setShowLetterModal] = useState(false);
-  const [showSanctionLetter, setShowSanctionLetter] = useState(false);
-  const [showConfetti, setShowConfetti] = useState(false);
   const [loanDetails, setLoanDetails] = useState<LoanDetails | null>(null);
   const [customerName, setCustomerName] = useState<string | null>(null);
   const [uploadedDocs, setUploadedDocs] = useState<string[]>([]);
@@ -762,7 +740,7 @@ export function ChatWidget() {
         }
       }, 800); // Brief delay to simulate connection
     }
-  }, [isOpen]);
+  }, [isOpen, sessionId]);
 
   // ================================================================
   // AUTO-ADVANCE FOR UNDERWRITING STAGE
@@ -927,6 +905,7 @@ export function ChatWidget() {
     setDecisionType(null);
     setSessionClosed(false);
     setClosureReason(null);
+    setIsAutoDownloading(false); // Reset auto-download state
 
     // PHASE 8: Reset acquisition source on restart
     setAcquisitionSource(null);
@@ -949,6 +928,47 @@ export function ChatWidget() {
   // ================================================================
   // PHASE 10: Helper to apply realistic processing delay with multi-step messages
   // ================================================================
+
+  // Helper to get processing delay configuration based on stage
+  const getDelayConfig = (stage: string) => {
+    switch (stage) {
+      case 'GREETING':
+        return { duration: 1800, loadingText: 'Initializing session...', steps: ['Establishing secure connection...', 'Initializing session...'] };
+      case 'PURPOSE':
+        return { duration: 1500, loadingText: 'Analyzing request...', steps: ['Understanding loan purpose...', 'Updating profile...'] };
+      case 'AMOUNT':
+        return { duration: 1500, loadingText: 'Checking limits...', steps: ['Recording requested amount...', 'Validating parameters...'] };
+      case 'CITY':
+        return { duration: 1500, loadingText: 'Verifying location...', steps: ['Checking serviceable areas...', 'Updating profile...'] };
+      case 'EMPLOYMENT_TYPE':
+        return { duration: 1500, loadingText: 'Processing...', steps: ['Recording employment status...', 'Updating profile...'] };
+      case 'INCOME':
+        return { duration: 1500, loadingText: 'Recording data...', steps: ['Capturing financial data...', 'Updating profile...'] };
+      case 'EXISTING_EMI':
+        return { duration: 1500, loadingText: 'Calculating...', steps: ['Calculating debt obligations...', 'Updating financial profile...'] };
+      case 'MOBILE':
+        return { duration: 1800, loadingText: 'Sending OTP...', steps: ['Generating secure OTP...', 'Sending SMS...'] };
+      case 'OTP':
+        return { duration: 2500, loadingText: 'Verifying OTP...', steps: ['Checking code...', 'Verifying identity...'] };
+      case 'KYC':
+        return { duration: 3000, loadingText: 'Verifying PAN...', steps: ['Connecting to NSDL...', 'Verifying PAN details...'] };
+      case 'UNDERWRITING':
+        return { duration: 4000, loadingText: 'Analyzing profile...', steps: ['Running credit check...', 'Calculating eligibility...', 'Finalizing decision...'] };
+      case 'OFFER_DISCUSSION':
+        return { duration: 2500, loadingText: 'Generating offer...', steps: ['Processing financial profile...', 'Calculating limits...'] };
+      case 'DOCUMENT_UPLOAD':
+        return { duration: 3000, loadingText: 'Verifying document...', steps: ['Scanning document...', 'Extracting information...', 'Verifying income...'] };
+      case 'TENURE_SELECTION':
+        return { duration: 3000, loadingText: 'Calculating EMI...', steps: ['Applying interest rates...', 'Calculating amortization schedule...', 'Finalizing offer...'] };
+      case 'SANCTION':
+        return { duration: 2500, loadingText: 'Generating letter...', steps: ['Preparing sanction letter...', 'Applying digital signatures...'] };
+      case 'REJECTION':
+        return { duration: 1500, loadingText: 'Finalizing...', steps: ['Saving application status...', 'Closing session...'] };
+      default:
+        return { duration: 1500, loadingText: 'Processing...', steps: ['Validating input...', 'Generating response...'] };
+    }
+  };
+
   // This function adds a delay before showing the response to simulate
   // real banking verification times. Shows multiple loading steps for realism.
   const applyProcessingDelay = async (stage: string): Promise<void> => {
@@ -1025,7 +1045,8 @@ export function ChatWidget() {
         },
         body: JSON.stringify({
           message: textToSend,
-          session_id: sessionId
+          session_id: sessionId,
+          acquisition_source: acquisitionSource
         }),
         signal: controller.signal
       });
@@ -1416,6 +1437,53 @@ export function ChatWidget() {
 
   // Note: handleRestart is defined earlier in the component (PHASE 5)
 
+  // Define loading scenarios for different bot actions
+  const LOADING_SCENARIOS: Record<string, { duration: number; steps: string[] }> = {
+    DEFAULT: {
+      duration: 2000,
+      steps: [
+        'Thinking...',
+        'Processing your request...',
+        'Generating response...'
+      ]
+    },
+    CREDIT_CHECK: {
+      duration: 3000,
+      steps: [
+        'Connecting to credit bureau...',
+        'Fetching credit report...',
+        'Analyzing credit score...'
+      ]
+    },
+    UNDERWRITING: {
+      duration: 4000,
+      steps: [
+        'Routing to underwriting agent...',
+        'Assessing risk parameters...',
+        'Evaluating loan eligibility...'
+      ]
+    },
+    SANCTION_LETTER: {
+      duration: 3500,
+      steps: [
+        'Generating sanction letter...',
+        'Computing amortization schedule...',
+        'Applying digital signature...'
+      ]
+    },
+    DOCUMENT_UPLOAD: {
+      duration: 5000,
+      steps: [
+        'Scanning document for clarity...',
+        'Extracting data using AI OCR...',
+        'Validating information...',
+        'Cross-referencing with databases...',
+        'Processing document...'
+      ]
+    }
+  };
+
+  // Handle file upload
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1436,6 +1504,7 @@ export function ChatWidget() {
     setMessages(prev => [...prev, uploadMsg]);
 
     setIsLoading(true);
+    setLoadingScenario('DOCUMENT_UPLOAD'); // Set the specific loading scenario
     setLoadingMessage('Uploading document...');
 
     try {
@@ -1501,8 +1570,11 @@ export function ChatWidget() {
       if (data.current_stage) {
         console.log(`📍 STAGE UPDATE (upload): ${currentStage} → ${data.current_stage}`);
         setCurrentStage(data.current_stage);
-        // showUpload is now automatically derived from currentStage
-        // No need to manually toggle - once stage advances, upload disappears!
+      }
+
+      // CRITICAL: Update the state flag using the backend response!
+      if (typeof data.show_upload !== 'undefined') {
+        setShowUploadFlag(data.show_upload === true);
       }
 
       // Handle sanction letter display
@@ -1514,14 +1586,14 @@ export function ChatWidget() {
 
     } catch (error) {
       console.error('Upload error:', error);
-      // PHASE 10: Professional error message without emoji
+      // Let the user know the OCR failed and they must try again
       const errorMsg: Message = {
         role: 'assistant',
-        content: `Document ${newDocs.length} received: ${file.name}\n\nPlease upload the remaining documents.`,
+        content: `Sorry, I couldn't process ${file.name}. Please ensure it is a clear image or PDF of your salary slip and try uploading again.`,
         timestamp: new Date().toISOString()
       };
       setMessages(prev => [...prev, errorMsg]);
-      // On error, stay in INCOME_DOC_UPLOAD stage (don't change currentStage)
+      // On error, stay in DOCUMENT_UPLOAD stage (don't change currentStage)
     }
 
     setIsLoading(false);
@@ -1604,7 +1676,7 @@ export function ChatWidget() {
       sendAdminEvent('FRAUD_DETECTED', { phone: '9988776655', name: customerName, risk: 'HIGH', reason: 'Multiple fraud indicators', rule: 'C' });
 
       // Step 12: Sales Agent - Empathetic Rejection
-      await addBotMessage(`I sincerely apologize, ${customerName}, but I'm unable to proceed with your loan application at this time.\n\nOur system has identified some concerns that require further review:\n\n• Credit history concerns\n• Identity verification issues\n• Multiple recent loan applications\n\nFor your security and protection, we recommend:\n\n1. Check your credit report at CIBIL.com\n2. Verify your PAN-Aadhaar linking status\n3. Contact our fraud prevention team if you believe this is an error\n\n📞 Customer Support: 1800-209-4477\n🏢 Visit nearest Tata Capital branch for manual verification\n\nWe take financial security very seriously and appreciate your understanding. 🙏`, 4000);
+      await addBotMessage(`I sincerely apologize, ${customerName}, but I'm unable to proceed with your loan application at this time.\n\nOur system has identified some concerns that require further review:\n\n• Credit history concerns\n• Identity verification issues\n• Multiple recent loan applications\n\nFor your security and protection, we recommend:\n\n1. Check your credit report at CIBIL.com\n2. Verify your PAN-Aadhaar linking status\n3. Contact our fraud prevention team if you believe this is an error\n\n📞 Customer Support: 1800-209-4477 | 🏢 Visit nearest Tata Capital branch for manual verification`, 4000);
 
       setIsLoading(false);
     } catch (error) {
@@ -1713,186 +1785,19 @@ export function ChatWidget() {
       setShowSanctionLetter(false);
       setLoanDetails(null);
       setCustomerName(null);
+      setIsAutoDownloading(false); // Reset auto-download state
     }
   };
 
-  const downloadSanctionLetter = () => {
-    const today = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
-    const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
-    const refNo = `TC/${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+  // ================================================================
+  // REMOVED: Bespoke jsPDF generation logic.
+  // We now cleanly route the ChatWidget "Download PDF" button 
+  // to toggle `isAutoDownloading`, which mounts the SanctionLetter
+  // component with `autoDownload={true}` for perfectly unified PDFs.
+  // ================================================================
 
-    // Create PDF document
-    const doc = new jsPDF();
-    const pageWidth = doc.internal.pageSize.getWidth();
-    let yPos = 20;
-
-    // Header with border
-    doc.setDrawColor(0, 69, 137);
-    doc.setLineWidth(0.5);
-    doc.rect(10, 10, pageWidth - 20, 25);
-
-    // Company name
-    doc.setFontSize(16);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(0, 69, 137);
-    doc.text('TATA CAPITAL LIMITED', pageWidth / 2, 20, { align: 'center' });
-
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Corporate Office: One World Centre, Mumbai', pageWidth / 2, 27, { align: 'center' });
-    doc.text('CIN: U65990MH2007PLC164987', pageWidth / 2, 32, { align: 'center' });
-
-    yPos = 50;
-
-    // Title
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(0, 0, 0);
-    doc.text('LOAN SANCTION LETTER', pageWidth / 2, yPos, { align: 'center' });
-    yPos += 15;
-
-    // Reference details
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Reference No: ${refNo}`, 15, yPos);
-    doc.text(`Date: ${today}`, pageWidth - 15, yPos, { align: 'right' });
-    yPos += 15;
-
-    // Addressee
-    doc.text(`To,`, 15, yPos);
-    yPos += 5;
-    doc.setFont('helvetica', 'bold');
-    doc.text(`${customerName || 'Valued Customer'}`, 15, yPos);
-    yPos += 10;
-
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Dear ${customerName || 'Customer'},`, 15, yPos);
-    yPos += 10;
-
-    // Subject
-    doc.setFont('helvetica', 'bold');
-    doc.text('Subject: APPROVAL OF PERSONAL LOAN APPLICATION', 15, yPos);
-    yPos += 10;
-
-    // Body text
-    doc.setFont('helvetica', 'normal');
-    const bodyText = 'We are pleased to inform you that your Personal Loan application has been APPROVED by our AI-Powered Underwriting System after thorough evaluation of your credit profile, income verification, and risk assessment.';
-    const splitBody = doc.splitTextToSize(bodyText, pageWidth - 30);
-    doc.text(splitBody, 15, yPos);
-    yPos += splitBody.length * 5 + 10;
-
-    // Loan Details Box
-    doc.setDrawColor(0, 128, 0);
-    doc.setLineWidth(0.3);
-    doc.rect(15, yPos, pageWidth - 30, 45);
-
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(0, 100, 0);
-    doc.text('SANCTIONED LOAN DETAILS', pageWidth / 2, yPos + 7, { align: 'center' });
-
-    yPos += 15;
-    doc.setFontSize(10);
-    doc.setTextColor(0, 0, 0);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Loan Amount Sanctioned:`, 20, yPos);
-    doc.setFont('helvetica', 'bold');
-    doc.text(`Rs. ${(loanDetails?.amount || 0).toLocaleString('en-IN')}`, pageWidth - 20, yPos, { align: 'right' });
-
-    yPos += 6;
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Annual Interest Rate:`, 20, yPos);
-    doc.setFont('helvetica', 'bold');
-    doc.text(`${loanDetails?.interest_rate || 0}% per annum`, pageWidth - 20, yPos, { align: 'right' });
-
-    yPos += 6;
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Loan Tenure:`, 20, yPos);
-    doc.setFont('helvetica', 'bold');
-    doc.text(`${loanDetails?.tenure_months || 0} months`, pageWidth - 20, yPos, { align: 'right' });
-
-    yPos += 6;
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Monthly EMI:`, 20, yPos);
-    doc.setFont('helvetica', 'bold');
-    doc.text(`Rs. ${(loanDetails?.monthly_emi || 0).toLocaleString('en-IN')}`, pageWidth - 20, yPos, { align: 'right' });
-
-    yPos += 6;
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Processing Fee:`, 20, yPos);
-    doc.text(`2% + GST`, pageWidth - 20, yPos, { align: 'right' });
-
-    yPos += 15;
-
-    // Terms & Conditions
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.text('TERMS & CONDITIONS', 15, yPos);
-    yPos += 7;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    const terms = [
-      `1. This sanction is valid until ${validUntil} (30 days from issue date).`,
-      '2. Disbursement subject to verification of original documents.',
-      '3. EMI repayment to commence from next month via auto-debit.',
-      '4. Late payment charges: 2% per month on overdue amount.',
-      '5. Loan covered under Credit Life Insurance (optional).'
-    ];
-
-    terms.forEach(term => {
-      const splitTerm = doc.splitTextToSize(term, pageWidth - 30);
-      doc.text(splitTerm, 15, yPos);
-      yPos += splitTerm.length * 4 + 2;
-    });
-
-    yPos += 8;
-
-    // Next Steps
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.text('NEXT STEPS', 15, yPos);
-    yPos += 7;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.text('• Submit original KYC documents at nearest Tata Capital branch', 15, yPos);
-    yPos += 5;
-    doc.text('• Sign loan agreement and provide cancelled cheque', 15, yPos);
-    yPos += 5;
-    doc.text('• Loan will be disbursed within 24 hours of documentation', 15, yPos);
-    yPos += 12;
-
-    // Contact Info
-    doc.setFont('helvetica', 'bold');
-    doc.text('For any queries, contact us:', 15, yPos);
-    yPos += 5;
-    doc.setFont('helvetica', 'normal');
-    doc.text('Customer Care: 1800-209-4477 | Email: customercare@tatacapital.com', 15, yPos);
-    yPos += 5;
-    doc.text('Website: www.tatacapital.com', 15, yPos);
-    yPos += 15;
-
-    // Footer signature
-    doc.text('Thank you for choosing Tata Capital. We look forward to serving you.', 15, yPos);
-    yPos += 10;
-    doc.text('Yours faithfully,', 15, yPos);
-    yPos += 15;
-    doc.setFont('helvetica', 'bold');
-    doc.text('Authorized Signatory', 15, yPos);
-    doc.setFont('helvetica', 'normal');
-    yPos += 4;
-    doc.text('Tata Capital Limited', 15, yPos);
-
-    // Bottom note
-    yPos = doc.internal.pageSize.getHeight() - 15;
-    doc.setFontSize(8);
-    doc.setTextColor(100, 100, 100);
-    doc.text('** This is a system-generated document **', pageWidth / 2, yPos, { align: 'center' });
-    doc.text('Generated by: TataSmartAgent AI Underwriter v3.0', pageWidth / 2, yPos + 4, { align: 'center' });
-
-    // Save PDF
-    doc.save(`Tata_Capital_Sanction_Letter_${customerName || 'Customer'}_${Date.now()}.pdf`);
+  const triggerAutoDownload = () => {
+    setIsAutoDownloading(true);
   };
 
   return (
@@ -1929,11 +1834,9 @@ export function ChatWidget() {
 
           {/* Chat Window - Centered Modal */}
           <div
-            className="bg-white rounded-2xl shadow-2xl border-2 border-gray-300 
-                       flex flex-col fixed z-[99999] overflow-hidden"
+            className={`bg-white rounded-2xl shadow-2xl border-2 border-gray-300 
+                       flex flex-col fixed z-[99999] overflow-hidden transition-all duration-300 ${isExpanded ? 'w-[95vw] h-[95vh] max-w-[1200px]' : 'w-[min(450px,90vw)] h-[min(650px,80vh)]'}`}
             style={{
-              width: 'min(450px, 90vw)',
-              height: 'min(550px, 75vh)',
               top: '50%',
               left: '50%',
               transform: 'translate(-50%, -50%)'
@@ -1960,7 +1863,14 @@ export function ChatWidget() {
                   <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
                 <button
-                  onClick={() => setIsOpen(false)}
+                  onClick={() => setIsExpanded(!isExpanded)}
+                  className="p-1.5 sm:p-2 hover:bg-white/20 rounded-lg transition-colors hidden sm:block"
+                  title={isExpanded ? "Minimize" : "Maximize"}
+                >
+                  {isExpanded ? <Minimize2 className="w-4 h-4 sm:w-5 sm:h-5" /> : <Maximize2 className="w-4 h-4 sm:w-5 sm:h-5" />}
+                </button>
+                <button
+                  onClick={() => { setIsOpen(false); setIsExpanded(false); }}
                   className="p-1.5 sm:p-2 hover:bg-white/20 rounded-lg transition-colors"
                 >
                   <X className="w-5 h-5 sm:w-6 sm:h-6" />
@@ -2037,7 +1947,7 @@ export function ChatWidget() {
                     )}
 
                     {/* Message Bubble - Responsive */}
-                    <div className={`max-w-[85%] sm:max-w-[75%] ${message.role === 'user'
+                    <div className={`max-w-[95%] sm:max-w-[85%] ${message.role === 'user'
                       ? 'bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-2xl rounded-tr-sm'
                       : 'bg-white border border-gray-100 rounded-2xl rounded-tl-sm'} p-3 sm:p-4 shadow-sm hover:shadow-md transition-shadow duration-200 break-words`}>
 
@@ -2056,7 +1966,7 @@ export function ChatWidget() {
 
                             if (isList) {
                               return (
-                                <div key={i} className="flex gap-2 ml-1 mb-1">
+                                <div key={i} className="flex gap-2 ml-1 mb-2">
                                   <span className="flex-shrink-0 mt-0.5">{line.trim().substring(0, 2)}</span>
                                   <span>{line.trim().substring(2)}</span>
                                 </div>
@@ -2073,7 +1983,7 @@ export function ChatWidget() {
 
                             // Standard paragraph with simple bold formatting
                             return (
-                              <p key={i} className="mb-1">
+                              <p key={i} className="mb-2.5">
                                 {line.split(/(\*\*.*?\*\*)/).map((part, j) =>
                                   part.startsWith('**') && part.endsWith('**') ?
                                     <strong key={j} className="font-semibold text-slate-900">{part.slice(2, -2)}</strong> :
@@ -2165,7 +2075,7 @@ export function ChatWidget() {
                         View
                       </button>
                       <button
-                        onClick={downloadSanctionLetter}
+                        onClick={triggerAutoDownload}
                         className="flex-1 bg-green-600 text-white py-2 rounded-lg flex items-center justify-center gap-1.5 hover:bg-green-700 transition-all text-sm font-medium shadow-md hover:shadow-lg"
                       >
                         <Download className="w-4 h-4" />
@@ -2337,9 +2247,33 @@ export function ChatWidget() {
       {showLetterModal && loanDetails && (
         <SanctionLetter
           customerName={customerName || 'Customer'}
-          loanDetails={loanDetails}
+          loanDetails={{
+            amount: loanDetails.amount || 0,
+            interest_rate: loanDetails.interest_rate || 0,
+            tenure_months: loanDetails.tenure_months || 0,
+            monthly_emi: loanDetails.monthly_emi || 0
+          }}
+          sessionId={sessionId}
           onClose={() => setShowLetterModal(false)}
         />
+      )}
+
+      {/* Invisible or background SanctionLetter for auto-downloading */}
+      {isAutoDownloading && loanDetails && (
+        <div className="opacity-0 pointer-events-none fixed inset-0 z-[-9999]">
+          <SanctionLetter
+            customerName={customerName || 'Customer'}
+            loanDetails={{
+              amount: loanDetails.amount || 0,
+              interest_rate: loanDetails.interest_rate || 0,
+              tenure_months: loanDetails.tenure_months || 0,
+              monthly_emi: loanDetails.monthly_emi || 0
+            }}
+            sessionId={sessionId}
+            onClose={() => setIsAutoDownloading(false)}
+            autoDownload={true}
+          />
+        </div>
       )}
     </>
   );

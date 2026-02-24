@@ -77,6 +77,6 @@ async def health_check():
 # ---------------------------------------------------------------------------
 # Router registration
 # ---------------------------------------------------------------------------
-# TODO: Import and include routers as modules are implemented:
-# from backend.orchestration.master_agent import router as orchestration_router
-# app.include_router(orchestration_router, prefix="/api/v1")
+
+from backend.routers.document_router import router as document_router
+app.include_router(document_router, prefix="/api")

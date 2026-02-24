@@ -74,6 +74,17 @@ except ImportError:
         "Install with: pip install groq"
     )
 
+# ── httpx for Local LLM calls ──────────────────────────────────────────
+_HAS_HTTPX = False
+try:
+    import httpx
+    _HAS_HTTPX = True
+except ImportError:
+    logger.info(
+        "httpx not installed — Local LLM fallback disabled. "
+        "Install with: pip install httpx"
+    )
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Role Prompts (GEMS)
@@ -107,21 +118,19 @@ RULES:
 
 # 🟡 Recovery Role — for confusion, off-topic, and unexpected input
 RECOVERY_PROMPT = """
-The user seems confused, off-topic, or has asked an unexpected question.
+The user has asked an off-topic question, is confused, or has provided an unexpected input.
 
 Your job:
-1. Acknowledge their message warmly.
-2. Gently guide them back to the loan application.
-3. Clarify what information is needed next based on the current stage.
-4. Keep the tone friendly, patient, and supportive.
+1. STRICTLY REFUSE to answer any questions that are not related to Tata Capital, personal loans, or finance.
+2. Do NOT say you are happy to help with their unrelated question.
+3. Politely explain that as a Tata Capital loan assistant, your expertise is strictly limited to personal loans.
+4. Firmly guide them back to the loan application.
 
 RULES:
-- be warm and patient — never dismissive
-- do not generate financial numbers
-- do not promise outcomes
-- if you know the current stage from context, mention what
-  specific information is needed next
-- keep responses under 60 words
+- NEVER answer general knowledge, geography, coding, or off-topic queries.
+- Keep the tone polite but very firm about your domain boundaries.
+- if you know the current stage from context, ask them exactly what is needed next.
+- keep responses under 60 words.
 """
 
 
@@ -354,6 +363,72 @@ def _generate_groq_response(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Local LLM Client (STEP 4c) — Ollama / LM Studio / LocalAI
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _generate_local_llm_response(
+    role_prompt: str,
+    user_message: str,
+    context: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Generate a response using a local LLM via OpenAI-compatible HTTP API.
+
+    Works with Ollama (default), LM Studio, LocalAI, or any server
+    that exposes ``/v1/chat/completions``.
+
+    Returns sanitised response or empty string on failure.
+    """
+    if not _HAS_HTTPX:
+        return ""
+
+    if not settings.LOCAL_LLM_ENABLED:
+        return ""
+
+    base_url = settings.LOCAL_LLM_URL.rstrip("/")
+    model = settings.LOCAL_LLM_MODEL
+
+    # Build context block
+    ctx_block = ""
+    if context:
+        safe_keys = {
+            "applicant_name", "stage", "loan_type", "employment_type",
+            "city", "purpose", "previous_agent_message",
+        }
+        ctx_lines = [f"- {k}: {v}" for k, v in context.items() if k in safe_keys]
+        if ctx_lines:
+            ctx_block = "\n[CONTEXT]\n" + "\n".join(ctx_lines)
+
+    try:
+        with httpx.Client(timeout=settings.LOCAL_LLM_TIMEOUT_SECONDS) as client:
+            resp = client.post(
+                f"{base_url}/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": role_prompt},
+                        {"role": "user", "content": f"{ctx_block}\n\n{user_message}"},
+                    ],
+                    "temperature": settings.GEMINI_TEMPERATURE,
+                    "max_tokens": settings.GEMINI_MAX_TOKENS,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if text:
+                logger.info("Local LLM response generated successfully (model=%s).", model)
+                return sanitize(text)
+
+        return ""
+
+    except Exception as exc:
+        logger.error("Local LLM error (%s): %s", base_url, exc)
+        return ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Safe Response Generator (STEP 5)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -397,28 +472,68 @@ def generate_ai_response(
     full_prompt = f"{role_prompt}{ctx_block}\n\n[USER MESSAGE]\n{user_message}"
 
     try:
-        response = model.generate_content(
-            full_prompt,
-            generation_config={
-                "temperature": settings.GEMINI_TEMPERATURE,
-                "max_output_tokens": settings.GEMINI_MAX_TOKENS,
-            },
-        )
-
-        if response and response.text:
-            return sanitize(response.text)
-
-        logger.warning("Gemini returned empty response — trying Groq fallback.")
+        import os
+        import requests
+        
+        primary_key = os.getenv("GEMINI_API_KEY")
+        fallback_keys_str = os.getenv("GEMINI_FALLBACK_KEYS", "")
+        fallback_keys = [k.strip() for k in fallback_keys_str.split(",") if k.strip()]
+        all_keys = [primary_key] + fallback_keys
+        
+        for idx, key in enumerate(all_keys):
+            if not key:
+                continue
+                
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}"
+            headers = {"Content-Type": "application/json"}
+            payload = {
+                "contents": [{"parts": [{"text": full_prompt}]}],
+                "generationConfig": {
+                    "temperature": settings.GEMINI_TEMPERATURE,
+                    "maxOutputTokens": settings.GEMINI_MAX_TOKENS,
+                }
+            }
+            
+            try:
+                resp = requests.post(url, json=payload, headers=headers, timeout=5)
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        content_parts = candidates[0].get("content", {}).get("parts", [])
+                        if content_parts:
+                            return sanitize(content_parts[0].get("text", ""))
+                elif resp.status_code == 429:
+                    logger.warning(f"[API ROTATION] Key {idx+1}/{len(all_keys)} reached rate limit (429)! Rotating...")
+                    continue
+                elif resp.status_code in (400, 403):
+                    logger.warning(f"[API ROTATION] Key {idx+1}/{len(all_keys)} is INVALID or EXPIRED ({resp.status_code})! Rotating...")
+                    continue
+                else:
+                    logger.error(f"Gemini API error (Key {idx+1}): {resp.status_code} - {resp.text}")
+                    break
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Network error querying Gemini (Key {idx+1}): {e}")
+                continue
+                
+        logger.warning("All Gemini keys exhausted or failed — trying Groq fallback.")
 
     except Exception as exc:
-        logger.error("Gemini API error: %s — trying Groq fallback.", exc)
+        logger.error("Gemini Multi-Key Setup error: %s — trying Groq fallback.", exc)
 
     # ── Groq fallback ────────────────────────────────────────────────
     groq_response = _generate_groq_response(role_prompt, user_message, context)
     if groq_response:
         return groq_response
 
-    logger.warning("Both Gemini and Groq failed — using static fallback.")
+    # ── Local LLM fallback ───────────────────────────────────────────
+    local_response = _generate_local_llm_response(role_prompt, user_message, context)
+    if local_response:
+        return local_response
+
+    logger.warning("All AI providers failed — using static fallback.")
     return fallback_response()
 
 
@@ -476,8 +591,10 @@ NO_AI_STAGES = {
     "decision",
     "document_upload",
     "sanction",
+    "rejection",
     "pan_verification",
     "phone_verification",
+    "underwriting"
 }
 
 
@@ -560,4 +677,5 @@ __all__ = [
     "sanitize",
     "fallback_response",
     "_generate_groq_response",
+    "_generate_local_llm_response",
 ]

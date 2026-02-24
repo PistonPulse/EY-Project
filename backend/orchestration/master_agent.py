@@ -180,43 +180,53 @@ class MasterAgent:
         # ── 3. Detect intent ───────────────────────────────────────────
         intent = await intent_detector.detect(user_message)
 
-        # ── 4. Route to worker agent ───────────────────────────────────
-        agent_key = STAGE_AGENT_MAP.get(state)
-        agent = self._agents.get(agent_key) if agent_key else None
-        if agent is None:
-            return self._envelope(
-                session,
-                "I'm not sure how to help right now. Type **help** for options.",
-                suggestions=["help", "restart"],
-                latency=t0,
-            )
+        # ── 4. LangGraph Execution ─────────────────────────────────────
+        # We now delegate the agent execution to the LangGraph application.
+        # This satisfies the "Agentic AI Framework" requirement while keeping
+        # our deterministic StateMachine as the comprehensive guardrail.
 
-        # ── 5. Execute agent ───────────────────────────────────────────
-        context = self._build_context(session, intent)
-        result: AgentResult = await agent.safe_process(session_id, user_message, context)
+        from langchain_core.messages import HumanMessage
+        from backend.orchestration.graph import app
 
-        # ── 6. Agent failure → retry ───────────────────────────────────
-        if not result.success:
+        # Build initial graph state
+        graph_input = {
+            "session_id": session_id,
+            "current_stage": state,
+            "collected_data": session.collected_data,
+            "messages": [HumanMessage(content=user_message)],
+        }
+
+        # Execute graph (runs the appropriate agent node based on stage)
+        # Note: We await ainvoke() because the graph nodes are async
+        graph_output = await app.ainvoke(graph_input)
+
+        # Extract results
+        ai_messages = graph_output.get("messages", [])
+        response_text = ai_messages[-1].content if ai_messages else "I'm not sure how to respond."
+        updated_data = graph_output.get("collected_data", {})
+        error_msg = graph_output.get("error")
+
+        # ── 6. Handle agent failure ────────────────────────────────────
+        if error_msg:
             retries = self.sm.record_retry(session_id)
             session = self.sm.get_or_create(session_id)
             return self._envelope(
                 session,
-                result.message or "That didn't work. Please try again.",
-                validation_error="; ".join(result.errors),
+                response_text or "That didn't work. Please try again.",
+                validation_error=error_msg,
                 suggestions=["help"],
-                metadata={"agent": agent_key, "retries": retries},
+                metadata={"agent": STAGE_AGENT_MAP.get(state), "retries": retries},
                 latency=t0,
             )
 
         # ── 7. Merge collected data ────────────────────────────────────
-        if result.data:
-            self.sm.update_data(session_id, result.data)
+        if updated_data:
+            self.sm.update_data(session_id, updated_data)
 
         # ── 8. Validate & advance ──────────────────────────────────────
         advanced, adv_msg = self.sm.advance(session_id)
         session = self.sm.get_or_create(session_id)  # refresh
 
-        response_text = result.message
         if advanced:
             nudge = STAGE_PROMPTS.get(session.state, "")
             if nudge:
@@ -246,10 +256,10 @@ class MasterAgent:
         return self._envelope(
             session,
             response_text,
-            data=result.data,
+            data=updated_data,
             validation_error=validation_error,
             metadata={
-                "agent": agent_key,
+                "agent": STAGE_AGENT_MAP.get(state),
                 "intent": intent.intent_type.value,
                 "advanced": advanced,
                 "ai_enhanced": ai_used,
