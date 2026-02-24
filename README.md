@@ -100,13 +100,21 @@ python3 mock_servers.py
 
 ---
 
+## 👥 Team & Co-Authorship
+
+This project is a collaborative effort engineered by:
+
+- **Tanish Gupta** ([@PistonPulse](https://github.com/PistonPulse)) - *System Architecture, State Machine & Deterministic Engine*
+- **Tanisha Mukherjee** ([@tanishamukherjee](https://github.com/tanishamukherjee)) - *RiskControlAgent, Multi-Layer Fraud Detection & Document Intelligence*
+
+---
+
 ## 📚 Deep Dive Technical Documentation
 
 For an absolutely exhaustive breakdown of the architectural code, the risk math, and the compliance mechanisms, please refer to the dedicated whitepapers located in the project root:
 
 1. **[COMPLETE_SYSTEM_DOCUMENTATION.md](COMPLETE_SYSTEM_DOCUMENTATION.md)** — The 10,000-foot view of the entire workflow.
-2. **[SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md)** — A rigorous breakdown of DLP (Data Leak Prevention), Ephemeral Memory OCR processing, and Identity Locking.
-3. **[Tanisha / Swayam / Gupta / Shah]_Role_DeepDive.docx** — Four massive 10+ page Microsoft Word files explaining every microscopic technological integration implemented by the respective team members.
+2. **[DEMO_INPUTS.md](DEMO_INPUTS.md)** — Demo test scenarios and synthetic input data.
 
 ---
 *Developed for the EY-Tata Capital Challenge 2026*
